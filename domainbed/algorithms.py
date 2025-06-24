@@ -2598,128 +2598,128 @@ class CasualOODAlgorithm(Algorithm):
         # 可学习 mask
         self.mask = nn.Parameter(torch.ones(self.z_dim))
 
-        def set_requires_grad_phase1(self):
-            """Freeze mask and classifier_tilde_s during phase 1."""
-            for name, param in self.named_parameters():
-                if name == "mask":
-                    param.requires_grad = False
-                elif "classifier_tilde_s" in name:
-                    param.requires_grad = False
-                else:
-                    param.requires_grad = True
+        self.update_steps = 0
 
-        def set_requires_grad_phase2(self):
-            """Enable only mask and tilde/combined classifiers for training."""
-            for name, param in self.named_parameters():
-                if name == "mask":
-                    param.requires_grad = True
-                elif "classifier_tilde_s" in name:
-                    param.requires_grad = True
-                else:
-                    param.requires_grad = False
-
-            for m in self.modules():
-                if isinstance(m, nn.BatchNorm1d) or isinstance(m, nn.BatchNorm2d):
-                    cls = m.__class__.__name__
-                    if "classifier_tilde_s" in cls:
-                        m.track_running_stats = True
-                    else:
-                        m.track_running_stats = False
-
-        def get_parameters_train_phase2(self, base_lr=1.0):
-            params = [
-                {"params": self.classifier_tilde_s.parameters(), "lr": 1.0 * base_lr},
-                {"params": self.mask, "lr": 1.0 * base_lr},
-            ]
-            return params
-
-        def get_parameters_train_phase1(self, base_lr=1.0):
-            base_params = itertools.chain(
-                self.projection_phi.parameters(),
-                self.projection_psi.parameters(),
-                self.classifier_u.parameters(),
-                self.domain_classifier.parameters())
-            params = [
-                {"params": self.featurizer.parameters(), "lr": 0.1 * base_lr},
-                {"params": base_params, "lr": 1.0 * base_lr},
-            ]
-            return params
-
-        def set_phase(self, phase):
-            """Configure model and optimizer for the given phase."""
-            self.phase = phase
-            if phase == 1:
-                self.set_requires_grad_phase1()
-                opt_params = self.get_parameters_train_phase1(self.hparams['lr'])
-            elif phase == 2:
-                self.set_requires_grad_phase2()
-                opt_params = self.get_parameters_train_phase2(self.hparams['lr'])
+    def set_requires_grad_phase1(self):
+        """Freeze mask and classifier_tilde_s during phase 1."""
+        for name, param in self.named_parameters():
+            if name == "mask":
+                param.requires_grad = False
+            elif "classifier_tilde_s" in name:
+                param.requires_grad = False
             else:
-                self.set_requires_grad_phase2()
-                opt_params = self.get_parameters_train_phase2(self.hparams['lr'])
+                param.requires_grad = True
 
-            self.optimizer = torch.optim.Adam(
-                opt_params,
-                lr=self.hparams['lr'],
-                weight_decay=self.hparams['weight_decay'])
-
-        def encode(self, x):
-            f = self.featurizer(x)
-            z_u = self.projection_phi(f)
-            z_s = self.projection_psi(f)
-            tilde_z_s = torch.sigmoid(self.mask) * z_s
-            u_logits = self.classifier_u(z_u)
-            s_logits = self.classifier_tilde_s(z_s)
-            tilde_s_logits = self.classifier_tilde_s(tilde_z_s)
-            combined_logits = u_logits+tilde_s_logits
-            return z_u, z_s, u_logits, s_logits, tilde_s_logits, combined_logits
-
-        def update(self, minibatches, unlabeled=None):
-            self.update_steps += 1
-            all_x = torch.cat([x for x, _ in minibatches])
-            all_y = torch.cat([y for _, y in minibatches])
-            domain_labels = torch.cat([
-                torch.full((x.size(0),), i, dtype=torch.long, device=all_x.device)
-                for i, (x, _) in enumerate(minibatches)
-            ])
-
-            z_u, z_s, u_logits, s_logits, tilde_s_logits, combined_logits = self.encode(all_x)
-
-            if self.phase == 1:
-                loss_cls = F.cross_entropy(u_logits, all_y)
-                loss_mmd = compute_mmd(z_u, domain_labels)
-                dom_logits = self.domain_classifier(z_s)
-                loss_dom = F.cross_entropy(dom_logits, domain_labels)
-                if self.hparams.get('mi_type', 'conditional') == 'conditional':
-                    loss_mi = compute_conditional_MI(z_u, z_s, all_y, self.num_classes)
+    def set_requires_grad_phase2(self):
+        """Enable only mask and tilde/combined classifiers for training."""
+        for name, param in self.named_parameters():
+            if name == "mask":
+                param.requires_grad = True
+            elif "classifier_tilde_s" in name:
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
+        for m in self.modules():
+            if isinstance(m, nn.BatchNorm1d) or isinstance(m, nn.BatchNorm2d):
+                cls = m.__class__.__name__
+                if "classifier_tilde_s" in cls:
+                    m.track_running_stats = True
                 else:
-                    sim = F.cosine_similarity(z_u, z_s, dim=1)
-                    loss_mi = torch.mean(sim ** 2)
-                loss = (loss_cls +
-                        self.hparams.get('decouple_beta', 0.) * loss_mi +
-                        self.hparams.get('mmd_lambda', 0.) * loss_mmd +
-                        self.hparams.get('domain_lambda', 0.) * loss_dom)
+                    m.track_running_stats = False
 
-            elif self.phase == 2:
-                if self.hparams.get('finetune_logits', 'tilde') == 'combined':
-                    logits = combined_logits
-                else:
-                    logits = tilde_s_logits
-                loss = F.cross_entropy(logits, all_y)
+    def get_parameters_train_phase2(self, base_lr=1.0):
+        params = [
+            {"params": self.classifier_tilde_s.parameters(), "lr": 1.0 * base_lr},
+            {"params": self.mask, "lr": 1.0 * base_lr},
+        ]
+        return params
 
-            else:  # finetune
-                if self.hparams.get('finetune_logits', 'tilde') == 'combined':
-                    logits = combined_logits
-                else:
-                    logits = tilde_s_logits
-                pseudo_labels = u_logits.detach().softmax(1).argmax(1)
-                loss = F.cross_entropy(logits, pseudo_labels)
+    def get_parameters_train_phase1(self, base_lr=1.0):
+        base_params = itertools.chain(
+            self.projection_phi.parameters(),
+            self.projection_psi.parameters(),
+            self.classifier_u.parameters(),
+            self.domain_classifier.parameters())
+        params = [
+            {"params": self.featurizer.parameters(), "lr": 0.1 * base_lr},
+            {"params": base_params, "lr": 1.0 * base_lr},
+        ]
+        return params
 
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
+    def set_phase(self, phase):
+        """Configure model and optimizer for the given phase."""
+        self.phase = phase
+        if phase == 1:
+            self.set_requires_grad_phase1()
+            opt_params = self.get_parameters_train_phase1(self.hparams['lr'])
+        elif phase == 2:
+            self.set_requires_grad_phase2()
+            opt_params = self.get_parameters_train_phase2(self.hparams['lr'])
+        else:
+            self.set_requires_grad_phase2()
+            opt_params = self.get_parameters_train_phase2(self.hparams['lr'])
+        self.optimizer = torch.optim.Adam(
+            opt_params,
+            lr=self.hparams['lr'],
+            weight_decay=self.hparams['weight_decay'])
 
-            return {'loss': loss.item()}
+    def encode(self, x):
+        f = self.featurizer(x)
+        z_u = self.projection_phi(f)
+        z_s = self.projection_psi(f)
+        tilde_z_s = torch.sigmoid(self.mask) * z_s
+        u_logits = self.classifier_u(z_u)
+        s_logits = self.classifier_tilde_s(z_s)
+        tilde_s_logits = self.classifier_tilde_s(tilde_z_s)
+        combined_logits = u_logits + tilde_s_logits
+        return z_u, z_s, u_logits, s_logits, tilde_s_logits, combined_logits
+
+    def update(self, minibatches, unlabeled=None):
+        self.update_steps += 1
+        all_x = torch.cat([x for x, _ in minibatches])
+        all_y = torch.cat([y for _, y in minibatches])
+        domain_labels = torch.cat([
+            torch.full((x.size(0),), i, dtype=torch.long, device=all_x.device)
+            for i, (x, _) in enumerate(minibatches)
+        ])
+
+        z_u, z_s, u_logits, s_logits, tilde_s_logits, combined_logits = self.encode(all_x)
+
+        if self.phase == 1:
+            loss_cls = F.cross_entropy(u_logits, all_y)
+            loss_mmd = compute_mmd(z_u, domain_labels)
+            dom_logits = self.domain_classifier(z_s)
+            loss_dom = F.cross_entropy(dom_logits, domain_labels)
+            if self.hparams.get('mi_type', 'conditional') == 'conditional':
+                loss_mi = compute_conditional_MI(z_u, z_s, all_y, self.num_classes)
+            else:
+                sim = F.cosine_similarity(z_u, z_s, dim=1)
+                loss_mi = torch.mean(sim ** 2)
+            loss = (loss_cls +
+                    self.hparams.get('decouple_beta', 0.) * loss_mi +
+                    self.hparams.get('mmd_lambda', 0.) * loss_mmd +
+                    self.hparams.get('domain_lambda', 0.) * loss_dom)
+
+        elif self.phase == 2:
+            if self.hparams.get('finetune_logits', 'tilde') == 'combined':
+                logits = combined_logits
+            else:
+                logits = tilde_s_logits
+            loss = F.cross_entropy(logits, all_y)
+
+        else:  # finetune
+            if self.hparams.get('finetune_logits', 'tilde') == 'combined':
+                logits = combined_logits
+            else:
+                logits = tilde_s_logits
+            pseudo_labels = u_logits.detach().softmax(1).argmax(1)
+            loss = F.cross_entropy(logits, pseudo_labels)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        return {'loss': loss.item()}
 
     def predict(self, x):
 
