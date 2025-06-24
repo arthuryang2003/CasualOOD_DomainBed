@@ -2687,11 +2687,11 @@ class CasualOODAlgorithm(Algorithm):
 
         if self.phase == 1:
             loss_cls = F.cross_entropy(u_logits, all_y)
-            loss_mmd = compute_mmd(z_u, domain_labels)
+            loss_mmd = self.compute_mmd(z_u, domain_labels)
             dom_logits = self.domain_classifier(z_s)
             loss_dom = F.cross_entropy(dom_logits, domain_labels)
             if self.hparams.get('mi_type', 'conditional') == 'conditional':
-                loss_mi = compute_conditional_MI(z_u, z_s, all_y, self.num_classes)
+                loss_mi = self.compute_conditional_MI(z_u, z_s, all_y, self.num_classes)
             else:
                 sim = F.cosine_similarity(z_u, z_s, dim=1)
                 loss_mi = torch.mean(sim ** 2)
@@ -2728,7 +2728,7 @@ class CasualOODAlgorithm(Algorithm):
         if isinstance(x, (DataLoader, list)):
             loaders = x if isinstance(x, list) else [x]
             if self.phase == 3:
-                return combined_inference(self, loaders, self.num_classes,
+                return self.combined_inference(self, loaders, self.num_classes,
                                            device, return_logits=True)
 
             # Phase 1/2: simply run the model over the provided loader(s)

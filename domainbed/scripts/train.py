@@ -48,6 +48,8 @@ if __name__ == "__main__":
         help="For domain adaptation, % of test to use unlabeled for training.")
     parser.add_argument('--skip_model_save', action='store_true')
     parser.add_argument('--save_model_every_checkpoint', action='store_true')
+    parser.add_argument('--gpu_id', type=int, default=0,
+        help='GPU device index to use')
     args = parser.parse_args()
 
     # If we ever want to implement checkpointing, just persist these values
@@ -91,6 +93,7 @@ if __name__ == "__main__":
     torch.backends.cudnn.benchmark = False
 
     if torch.cuda.is_available():
+        torch.cuda.set_device(args.gpu_id)
         device = "cuda"
     else:
         device = "cpu"
@@ -266,7 +269,7 @@ if __name__ == "__main__":
         total_steps = 0
 
         def train_steps(phase, num_steps, iterator):
-            nonlocal total_steps
+            global total_steps
             algorithm.set_phase(phase)
             for _ in range(num_steps):
                 minibatches_device = [(x.to(device), y.to(device))
@@ -288,7 +291,7 @@ if __name__ == "__main__":
 
         evals = zip(eval_loader_names, eval_loaders, eval_weights)
         for name, loader, weights in evals:
-            acc = algorithms.combined_inference(algorithm, [loader], dataset.num_classes, device)
+            acc = algorithm.combined_inference(algorithm, [loader], dataset.num_classes, device)
             results[name + '_acc'] = acc / 100.0
         results.update({'hparams': hparams, 'args': vars(args)})
         epochs_path = os.path.join(args.output_dir, 'results.jsonl')
