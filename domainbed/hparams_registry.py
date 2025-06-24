@@ -186,6 +186,18 @@ def _hparams(algorithm, dataset, random_seed):
         else:
             _hparam('urm_discriminator_lr', 5e-5, lambda r: 10**r.uniform(-6, -4.5))
 
+    elif algorithm == 'CasualOODAlgorithm':
+        _hparam('z_dim', 128, lambda r: int(r.choice([64, 128])))
+        _hparam('phase1_steps', 5000, lambda r: int(r.choice([2500, 5000])))
+        _hparam('phase2_steps', 1000, lambda r: int(r.choice([500, 1000])))
+        _hparam('finetune_steps', 1000, lambda r: int(r.choice([500, 1000])))
+        _hparam('finetune_logits', 'tilde', lambda r: r.choice(['tilde', 'combined']))
+        _hparam('decouple_beta', 10.0, lambda r: r.choice([0.0, 0.1]))
+        _hparam('mmd_lambda', 10.0, lambda r: r.choice([0.0, 0.1]))
+        _hparam('domain_lambda', 1.0, lambda r: r.choice([0.0, 0.1]))
+        _hparam('mi_type', 'conditional', lambda r: r.choice(['conditional', 'cosine']))
+
+
 
     if algorithm == "ADRMX":
         _hparam('cnt_lambda', 1.0, lambda r: r.choice([1.0]))
