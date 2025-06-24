@@ -16,28 +16,28 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 DATASETS = [
     # Debug
-    "Debug28",
-    "Debug224",
+    # "Debug28",
+    # "Debug224",
     # Small images
     "ColoredMNIST",
-    "RotatedMNIST",
+    # "RotatedMNIST",
     # Big images
-    "VLCS",
-    "PACS",
-    "OfficeHome",
-    "TerraIncognita",
-    "DomainNet",
-    "SVIRO",
-    # WILDS datasets
-    "WILDSCamelyon",
-    "WILDSFMoW",
-    # Spawrious datasets
-    "SpawriousO2O_easy",
-    "SpawriousO2O_medium",
-    "SpawriousO2O_hard",
-    "SpawriousM2M_easy",
-    "SpawriousM2M_medium",
-    "SpawriousM2M_hard",
+    # "VLCS",
+    # "PACS",
+    # "OfficeHome",
+    # "TerraIncognita",
+    # "DomainNet",
+    # "SVIRO",
+    # # WILDS datasets
+    # "WILDSCamelyon",
+    # "WILDSFMoW",
+    # # Spawrious datasets
+    # "SpawriousO2O_easy",
+    # "SpawriousO2O_medium",
+    # "SpawriousO2O_hard",
+    # "SpawriousM2M_easy",
+    # "SpawriousM2M_medium",
+    # "SpawriousM2M_hard",
 ]
 
 def get_dataset_class(dataset_name):

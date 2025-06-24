@@ -113,7 +113,19 @@ python -m domainbed.scripts.sweep launch\
        --n_hparams 5\
        --n_trials 1
 ```
-
+```sh
+python -m domainbed.scripts.sweep launch\
+       --data_dir=./domainbed/data\
+       --output_dir=./output/path\
+       --command_launcher local\
+       --algorithms IRM \
+       --datasets PACS\
+       --n_hparams 5\
+       --n_trials 1\
+       --single_test_envs\
+       --skip_confirmation\
+       
+```
 After all jobs have either succeeded or failed, you can delete the data from failed jobs with ``python -m domainbed.scripts.sweep delete_incomplete`` and then re-launch them by running ``python -m domainbed.scripts.sweep launch`` again. Specify the same command-line arguments in all calls to `sweep` as you did the first time; this is how the sweep script knows which jobs were launched originally.
 
 To view the results of your sweep:
@@ -122,6 +134,8 @@ To view the results of your sweep:
 python -m domainbed.scripts.collect_results\
        --input_dir=/my/sweep/output/path
 ````
+python -m domainbed.scripts.collect_results\
+       --input_dir=./output/path\
 
 ## Running unit tests
 

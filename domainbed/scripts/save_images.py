@@ -14,12 +14,13 @@ from tqdm import tqdm
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Domain generalization')
-    parser.add_argument('--data_dir', type=str)
-    parser.add_argument('--output_dir', type=str)
+    parser.add_argument('--data_dir', type=str,default='../data')
+    parser.add_argument('--output_dir', type=str,default='../visuallize')
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
-    datasets_to_save = ['OfficeHome', 'TerraIncognita', 'DomainNet', 'RotatedMNIST', 'ColoredMNIST', 'SVIRO']
+    # datasets_to_save = ['OfficeHome', 'TerraIncognita', 'DomainNet', 'RotatedMNIST', 'ColoredMNIST', 'SVIRO']
+    datasets_to_save = [ 'ColoredMNIST']
 
     for dataset_name in tqdm(datasets_to_save):
         hparams = hparams_registry.default_hparams('ERM', dataset_name)
