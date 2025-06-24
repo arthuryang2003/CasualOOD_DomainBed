@@ -2597,24 +2597,6 @@ class CasualOODAlgorithm(Algorithm):
         # 可学习 mask
         self.mask = nn.Parameter(torch.ones(self.z_dim))
 
-        # Optimizers
-        self.optimizer_phase1 = torch.optim.SGD(
-            list(self.featurizer.parameters()) +
-            list(self.projection_phi.parameters()) +
-            list(self.projection_psi.parameters()) +
-            list(self.classifier_u.parameters()) +
-            list(self.domain_classifier.parameters()),
-            lr=hparams['lr'], momentum=hparams['momentum'],
-            weight_decay=hparams['weight_decay'], nesterov=True
-        )
-
-        self.optimizer_phase2 = torch.optim.SGD(
-            list(self.classifier_tilde_s.parameters()) +
-            [self.mask],
-            lr=hparams['lr'], momentum=hparams['momentum'],
-            weight_decay=hparams['weight_decay'], nesterov=True
-        )
-
         def set_requires_grad_phase1(self):
             """Freeze mask and classifier_tilde_s during phase 1."""
             for name, param in self.named_parameters():
