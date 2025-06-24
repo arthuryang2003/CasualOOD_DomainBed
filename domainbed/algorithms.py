@@ -2722,6 +2722,27 @@ class CasualOODAlgorithm(Algorithm):
             return {'loss': loss.item()}
 
     def predict(self, x):
+
+        device = next(self.parameters()).device
+
+        if isinstance(x, (DataLoader, list)):
+            loaders = x if isinstance(x, list) else [x]
+            if self.phase == 3:
+                return combined_inference(self, loaders, self.num_classes,
+                                           device, return_logits=True)
+
+            # Phase 1/2: simply run the model over the provided loader(s)
+            preds = []
+            self.eval()
+            with torch.no_grad():
+                for loader in loaders:
+                    for batch in loader:
+                        data = batch[0].to(device)
+                        _, _, _, _, _, logits = self.encode(data)
+                        preds.append(logits.cpu())
+            self.train()
+            return torch.cat(preds, dim=0)
+
         _, _, _, _, _, combined_logits = self.encode(x)
         return combined_logits
 
