@@ -9,6 +9,9 @@ from itertools import chain
 import copy
 import numpy as np
 from collections import OrderedDict
+
+from torch.utils.data import DataLoader
+
 try:
     from backpack import backpack, extend
     from backpack.extensions import BatchGrad
@@ -59,6 +62,7 @@ ALGORITHMS = [
     'ADRMX',
     'URM',
     'CasualOODAlgorithm',
+    'CasualOOD_Z_only',
 ]
 
 def get_algorithm_class(algorithm_name):
@@ -2553,6 +2557,53 @@ class ADRMX(Algorithm):
     def predict(self, x):
         return self.network(x)
 
+class CasualOOD_Z_only(Algorithm):
+    def __init__(self, input_shape, num_classes, num_domains, hparams):
+        super(CasualOOD_Z_only, self).__init__(input_shape, num_classes, num_domains, hparams)
+
+        self.num_classes = num_classes
+        self.num_domains = num_domains
+        self.hparams = hparams
+        self.update_count = 0
+
+        # 特征提取器（如 ResNet/MNIST_CNN）
+        self.featurizer = networks.Featurizer(input_shape, hparams)
+
+        self.classifier = networks.Classifier(
+            self.featurizer.n_outputs,
+            num_classes,
+            is_nonlinear=True)
+
+        self.optimizer = torch.optim.Adam(
+            list(self.featurizer.parameters()) +
+            list(self.classifier.parameters()) ,
+            lr=self.hparams["lr"],
+            weight_decay=self.hparams['weight_decay']
+        )
+
+    def update(self, minibatches, unlabeled=None):
+        all_x = torch.cat([x for x, y in minibatches])
+        all_y = torch.cat([y for x, y in minibatches])
+
+        logits = self.encode(all_x)
+        loss = F.cross_entropy(logits, all_y)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        return {'loss': loss.item()}
+    def encode(self, x):
+        f = self.featurizer(x)
+        logits = self.classifier(f)
+
+        return logits
+
+
+    def predict(self, x):
+
+        return self.encode(x)
+
 class CasualOODAlgorithm(Algorithm):
     """CasualOOD Algorithm: Feature disentanglement and pseudo-label adaptation."""
 
@@ -2565,7 +2616,7 @@ class CasualOODAlgorithm(Algorithm):
         self.update_count = 0
 
         # 特征提取器（如 ResNet/MNIST_CNN）
-        self.featurizer = Featurizer(input_shape, hparams)
+        self.featurizer = networks.Featurizer(input_shape, hparams)
 
         # 自动获取特征维度
         if hasattr(self.featurizer, 'n_outputs'):
@@ -2589,11 +2640,11 @@ class CasualOODAlgorithm(Algorithm):
         )
 
         # 分类器
-        self.classifier_u = Classifier(self.z_dim, num_classes, is_nonlinear=True)
-        self.classifier_tilde_s = Classifier(self.z_dim, num_classes, is_nonlinear=True)
+        self.classifier_u = networks.Classifier(self.z_dim, num_classes, is_nonlinear=True)
+        self.classifier_tilde_s = networks.Classifier(self.z_dim, num_classes, is_nonlinear=True)
 
         # 域分类器
-        self.domain_classifier = Classifier(self.z_dim, num_domains, is_nonlinear=True)
+        self.domain_classifier = networks.Classifier(self.z_dim, num_domains, is_nonlinear=True)
 
         # 可学习 mask
         self.mask = nn.Parameter(torch.ones(self.z_dim))
@@ -2910,7 +2961,7 @@ class CasualOODAlgorithm(Algorithm):
                     stable_pred_softmax = F.softmax(u_logits, dim=1)
                     unstable_pred_softmax = F.softmax(tilde_s_logits, dim=1)
 
-                    unstable_pred_corrected = least_squares_correction(unstable_pred_softmax, e_matrix)
+                    unstable_pred_corrected = self.least_squares_correction(unstable_pred_softmax, e_matrix)
 
                     stable_logit = torch.log(stable_pred_softmax + 1e-6)
                     unstable_logit = torch.log(unstable_pred_corrected + 1e-6)
