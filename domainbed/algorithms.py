@@ -63,6 +63,7 @@ ALGORITHMS = [
     'URM',
     'CasualOODAlgorithm',
     'CasualOOD_Z_only',
+    'CasualOOD_Zu_only',
 ]
 
 def get_algorithm_class(algorithm_name):
@@ -2593,6 +2594,8 @@ class CasualOOD_Z_only(Algorithm):
         self.optimizer.step()
 
         return {'loss': loss.item()}
+
+
     def encode(self, x):
         f = self.featurizer(x)
         logits = self.classifier(f)
@@ -2603,6 +2606,156 @@ class CasualOOD_Z_only(Algorithm):
     def predict(self, x):
 
         return self.encode(x)
+
+
+class CasualOOD_Zu_only(Algorithm):
+    def __init__(self, input_shape, num_classes, num_domains, hparams):
+        super(CasualOOD_Zu_only, self).__init__(input_shape, num_classes, num_domains, hparams)
+
+        self.num_classes = num_classes
+        self.num_domains = num_domains
+        self.hparams = hparams
+        self.update_steps = 0
+
+        # 特征提取器（如 ResNet/MNIST_CNN）
+        self.featurizer = networks.Featurizer(input_shape, hparams)
+
+        self.z_dim = hparams['z_dim']
+
+        # 不变特征和变化特征的投影层
+        self.projection_phi = nn.Sequential(
+            nn.Linear(self.featurizer.n_outputs, self.z_dim),
+        )
+        self.projection_psi = nn.Sequential(
+            nn.Linear(self.featurizer.n_outputs, self.z_dim),
+        )
+
+        # 分类器
+        self.classifier_u = networks.Classifier(self.z_dim, num_classes, is_nonlinear=True)
+
+        # 域分类器
+        self.domain_classifier = networks.Classifier(self.z_dim, num_domains, is_nonlinear=True)
+
+        self.optimizer = torch.optim.Adam(
+            list(self.featurizer.parameters()) +
+            list(self.projection_phi.parameters()) +
+            list(self.projection_psi.parameters()) +
+            list(self.classifier_u.parameters()) +
+            list(self.domain_classifier.parameters()) ,
+            lr=self.hparams["lr"],
+            weight_decay=self.hparams['weight_decay']
+        )
+
+
+    def update(self, minibatches, unlabeled=None):
+        self.update_steps += 1
+        all_x = torch.cat([x for x, _ in minibatches])
+        all_y = torch.cat([y for _, y in minibatches])
+        domain_labels = torch.cat([
+            torch.full((x.size(0),), i, dtype=torch.long, device=all_x.device)
+            for i, (x, _) in enumerate(minibatches)
+        ])
+
+        z_u, z_s, u_logits = self.encode(all_x)
+        loss_cls = F.cross_entropy(u_logits, all_y)
+        loss_mmd = self.compute_mmd(z_u, domain_labels)
+        dom_logits = self.domain_classifier(z_s)
+        loss_dom = F.cross_entropy(dom_logits, domain_labels)
+        loss_mi = self.compute_conditional_MI(z_u, z_s, all_y, self.num_classes)
+
+        loss = (loss_cls +
+                self.hparams.get('mi_lambda', 0.) * loss_mi +
+                self.hparams.get('mmd_lambda', 0.) * loss_mmd +
+                self.hparams.get('domain_lambda', 0.) * loss_dom)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        return {'loss_total': loss.item(),
+                'loss_cls': loss_cls.item(),
+                'loss_mmd': loss_mmd.item(),
+                'loss_dom': loss_dom.item(),
+                'loss_mi': loss_mi.item(),}
+
+
+    def encode(self, x):
+        f = self.featurizer(x)
+        z_u = self.projection_phi(f)
+        z_s = self.projection_psi(f)
+        u_logits = self.classifier_u(z_u)
+        return z_u, z_s,u_logits
+
+
+    def predict(self, x):
+        z_u, z_s, u_logits = self.encode(x)
+        return u_logits
+
+
+    @staticmethod
+    def compute_mmd(x: torch.Tensor, domain_labels: torch.Tensor,
+                    kernel_mul: float = 2.0, kernel_num: int = 5, fix_sigma=None) -> torch.Tensor:
+        unique_domains = domain_labels.unique()
+        domain_features = [x[domain_labels == dom] for dom in unique_domains]
+
+        mmd_loss = 0.
+        count = 0
+        for i in range(len(domain_features)):
+            for j in range(i + 1, len(domain_features)):
+                xi = domain_features[i]
+                xj = domain_features[j]
+                if xi.size(0) < 2 or xj.size(0) < 2:
+                    continue
+                mmd_loss += CasualOODAlgorithm._mmd_pairwise(xi, xj, kernel_mul, kernel_num, fix_sigma)
+                count += 1
+
+        return mmd_loss / max(count, 1)
+
+    @staticmethod
+    def _gaussian_kernel(source, target, kernel_mul, kernel_num, fix_sigma):
+        total = torch.cat([source, target], dim=0)
+        n_samples = total.size(0)
+        L2_distance = ((total.unsqueeze(0) - total.unsqueeze(1)) ** 2).sum(2)
+
+        if fix_sigma:
+            bandwidth = fix_sigma
+        else:
+            bandwidth = torch.sum(L2_distance.data) / (n_samples**2 - n_samples)
+            bandwidth = torch.clamp(bandwidth, min=1e-3)
+
+        bandwidth /= kernel_mul ** (kernel_num // 2)
+        bandwidth_list = [bandwidth * (kernel_mul ** i) for i in range(kernel_num)]
+        kernels = [torch.exp(-L2_distance / bw) for bw in bandwidth_list]
+        return sum(kernels)
+
+    @staticmethod
+    def _mmd_pairwise(source, target, kernel_mul, kernel_num, fix_sigma):
+        n = source.size(0)
+        m = target.size(0)
+        kernels = CasualOODAlgorithm._gaussian_kernel(source, target, kernel_mul, kernel_num, fix_sigma)
+
+        XX = kernels[:n, :n].mean()
+        YY = kernels[n:, n:].mean()
+        XY = kernels[:n, n:].mean()
+        YX = kernels[n:, :n].mean()
+        return XX + YY - XY - YX
+
+    @staticmethod
+    def compute_conditional_MI(zu, zs, y, num_classes):
+        batch_size, feat_dim = zu.size()
+        one_hot = F.one_hot(y, num_classes=num_classes).float()
+
+        sum_zs = one_hot.T @ zs
+        count_zs = one_hot.sum(dim=0, keepdim=True).T + 1e-6
+        mean_zs = sum_zs / count_zs
+        mean_zs_per_sample = mean_zs[y]
+        diff = zs - mean_zs_per_sample
+        weighted_diff = zu * diff
+        avg_weighted_diff = weighted_diff.mean(dim=0)
+
+        loss_MI = torch.norm(avg_weighted_diff, p=1)
+        return loss_MI
+
 
 class CasualOODAlgorithm(Algorithm):
     """CasualOOD Algorithm: Feature disentanglement and pseudo-label adaptation."""

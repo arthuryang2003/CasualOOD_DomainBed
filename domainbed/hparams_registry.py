@@ -185,6 +185,11 @@ def _hparams(algorithm, dataset, random_seed):
             _hparam('urm_discriminator_lr', 1e-3, lambda r: 10**r.uniform(-5.5, -3.5))
         else:
             _hparam('urm_discriminator_lr', 5e-5, lambda r: 10**r.uniform(-6, -4.5))
+    elif algorithm == 'CasualOOD_Zu_only':
+        _hparam('z_dim', 64, lambda r: int(r.choice([32, 128])))
+        _hparam('mi_lambda', 2.0, lambda r: r.choice([0.5, 2.0]))
+        _hparam('mmd_lambda', 2.0, lambda r: r.choice([0.5, 2.0]))
+        _hparam('domain_lambda', 1.0, lambda r: r.choice([0.5, 2.0]))
 
     elif algorithm == 'CasualOODAlgorithm':
         _hparam('z_dim', 128, lambda r: int(r.choice([64, 128])))

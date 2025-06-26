@@ -91,8 +91,11 @@ python3 -m domainbed.scripts.train\
        --dataset ColoredMNIST\
        --test_env 2
 ```
-
-Launch a sweep:
+python3 -m domainbed.scripts.train\
+       --data_dir=./domainbed/data/ \
+       --algorithm CasualOOD_Zu_only\
+       --dataset ColoredMNIST\
+       --test_env 2
 
 ```sh
 python -m domainbed.scripts.sweep launch\
@@ -139,6 +142,18 @@ python -m domainbed.scripts.sweep launch\
        --skip_confirmation\
        
 After all jobs have either succeeded or failed, you can delete the data from failed jobs with ``python -m domainbed.scripts.sweep delete_incomplete`` and then re-launch them by running ``python -m domainbed.scripts.sweep launch`` again. Specify the same command-line arguments in all calls to `sweep` as you did the first time; this is how the sweep script knows which jobs were launched originally.
+
+CUDA_VISIBLE_DEVICES=1,2,3,4,5,6,7 \
+python -m domainbed.scripts.sweep launch \
+    --data_dir=./domainbed/data \
+    --output_dir=./output/path \
+    --command_launcher multi_gpu \
+    --algorithms CasualOOD_Z_only \
+    --datasets ColoredMNIST \
+    --n_hparams 5 \
+    --n_trials 3 \
+    --single_test_envs \
+    --skip_confirmation
 
 To view the results of your sweep:
 
