@@ -290,9 +290,12 @@ if __name__ == "__main__":
         }
 
         evals = zip(eval_loader_names, eval_loaders, eval_weights)
+        # for name, loader, weights in evals:
+        #     acc = algorithm.combined_inference(algorithm, [loader], dataset.num_classes, device)
+        #     results[name + '_acc'] = acc / 100.0
         for name, loader, weights in evals:
-            acc = algorithm.combined_inference(algorithm, [loader], dataset.num_classes, device)
-            results[name + '_acc'] = acc / 100.0
+            acc = misc.accuracy(algorithm, loader, weights, device)
+            results[name + '_acc'] = acc
         results.update({'hparams': hparams, 'args': vars(args)})
         epochs_path = os.path.join(args.output_dir, 'results.jsonl')
         with open(epochs_path, 'a') as f:

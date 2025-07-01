@@ -2765,9 +2765,9 @@ class CasualOOD_Zu_only(Algorithm):
         loss_MI = torch.norm(avg_weighted_diff, p=1)
         return loss_MI
 
-class CasualOOD(CasualOOD_Zu_only):
+class CasualOODAlgorithm(CasualOOD_Zu_only):
     def __init__(self, input_shape, num_classes, num_domains, hparams):
-        super(CasualOOD, self).__init__(input_shape, num_classes, num_domains, hparams)
+        super(CasualOODAlgorithm, self).__init__(input_shape, num_classes, num_domains, hparams)
 
         # 新增模块：mask 和 classifier_tilde_s
         self.mask = nn.Parameter(torch.ones(self.z_dim))

@@ -99,8 +99,9 @@ python3 -m domainbed.scripts.train\
 ```
 python3 -m domainbed.scripts.train\
        --data_dir=./domainbed/data/ \
-       --algorithm CasualOOD_Zu_only\
+       --algorithm CasualOODAlgorithm\
        --dataset ColoredMNIST\
+       --uda_holdout_fraction=0.2 \
        --test_env 2
 
 ```sh
@@ -149,15 +150,25 @@ python -m domainbed.scripts.sweep launch\
        
 After all jobs have either succeeded or failed, you can delete the data from failed jobs with ``python -m domainbed.scripts.sweep delete_incomplete`` and then re-launch them by running ``python -m domainbed.scripts.sweep launch`` again. Specify the same command-line arguments in all calls to `sweep` as you did the first time; this is how the sweep script knows which jobs were launched originally.
 
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-python -m domainbed.scripts.sweep launch \
+CUDA_VISIBLE_DEVICES=5,6,7 \
+python -m domainbed.scripts.sweep delete_incomplete \
     --data_dir=./domainbed/data \
-    --output_dir=./output/Zu_mmd \
+    --output_dir=./output/Zu_mmd_mi_domain \
     --command_launcher smart_gpu \
     --algorithms CasualOOD_Zu_only \
     --datasets ColoredMNIST \
     --n_hparams 20 \
     --n_trials 3 \
+    --single_test_envs \
+    --skip_confirmation
+python -m domainbed.scripts.sweep launch \
+    --data_dir=./domainbed/data \
+    --output_dir=./output/Main \
+    --command_launcher smart_gpu \
+    --algorithms CasualOODAlgorithm \
+    --datasets ColoredMNIST \
+    --n_hparams 1 \
+    --n_trials 1 \
     --single_test_envs \
     --skip_confirmation
 
@@ -169,6 +180,8 @@ python -m domainbed.scripts.collect_results\
 ````
 python -m domainbed.scripts.collect_results\
        --input_dir=./output/path\
+
+python -m domainbed.scripts.list_top_hparams        --input_dir=./output/Zu_mmd --dataset=ColoredMNIST --algorithm=CasualOOD_Zu_only --test_env=2
 
 ## Running unit tests
 
