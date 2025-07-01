@@ -7,9 +7,6 @@ which runs all commands serially on the local machine.
 """
 
 import subprocess
-import time
-import torch
-import os
 
 def local_launcher(commands):
     """Launch commands serially on the local machine."""
@@ -17,12 +14,11 @@ def local_launcher(commands):
         subprocess.call(cmd, shell=True)
 
 def dummy_launcher(commands):
-    """
-    Doesn't run anything; instead, prints each command.
-    Useful for testing.
-    """
+    """Doesn't run anything; instead, prints each command.
+    Useful for testing."""
     for cmd in commands:
         print(f'Dummy launcher: {cmd}')
+
 
 def multi_gpu_launcher(commands):
     """
@@ -56,11 +52,42 @@ def multi_gpu_launcher(commands):
         if p is not None:
             p.wait()
 
+def smart_gpu_launcher(commands):
+    """
+    Launch commands on all GPUs in parallel, each GPU最多分配4个任务。
+    """
+    print('INFO: Using fixed-capacity multi_gpu_launcher (max 4 per GPU)')
+    try:
+        available_gpus = [x for x in os.environ['CUDA_VISIBLE_DEVICES'].split(',') if x != '']
+    except Exception:
+        available_gpus = [str(x) for x in range(torch.cuda.device_count())]
+
+    n_gpus = len(available_gpus)
+    max_procs_per_gpu = 4
+    procs_by_gpu = [[] for _ in range(n_gpus)]
+
+    while len(commands) > 0:
+        for gpu_idx, gpu_id in enumerate(available_gpus):
+            # 清除已经完成的任务
+            procs_by_gpu[gpu_idx] = [p for p in procs_by_gpu[gpu_idx] if p.poll() is None]
+
+            # 如果该GPU还有空位
+            if len(procs_by_gpu[gpu_idx]) < max_procs_per_gpu and commands:
+                cmd = commands.pop(0)
+                full_cmd = f'CUDA_VISIBLE_DEVICES={gpu_id} {cmd}'
+                print(f"[GPU {gpu_id}] Launching: {cmd}")
+                proc = subprocess.Popen(full_cmd, shell=True)
+                procs_by_gpu[gpu_idx].append(proc)
+
+        time.sleep(1)
+
 REGISTRY = {
     'local': local_launcher,
     'dummy': dummy_launcher,
-    'multi_gpu': multi_gpu_launcher
+    'multi_gpu': multi_gpu_launcher,
+    'smart_gpu': smart_gpu_launcher
 }
+
 
 try:
     from domainbed import facebook
