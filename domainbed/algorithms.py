@@ -2570,14 +2570,25 @@ class CasualOOD_Z_only(Algorithm):
         # 特征提取器（如 ResNet/MNIST_CNN）
         self.featurizer = networks.Featurizer(input_shape, hparams)
 
-        self.classifier = networks.Classifier(
-            self.featurizer.n_outputs,
-            num_classes,
-            is_nonlinear=True)
+        self.z_dim = hparams['z_dim']
+
+        # 不变特征和变化特征的投影层
+        self.projection_phi = nn.Sequential(
+            nn.Linear(self.featurizer.n_outputs, self.z_dim),
+        )
+        self.projection_psi = nn.Sequential(
+            nn.Linear(self.featurizer.n_outputs, self.z_dim),
+        )
+
+        # 分类器
+        self.classifier_u = networks.Classifier(self.z_dim, num_classes, is_nonlinear=True)
+
 
         self.optimizer = torch.optim.Adam(
             list(self.featurizer.parameters()) +
-            list(self.classifier.parameters()) ,
+            list(self.projection_phi.parameters()) +
+            list(self.projection_psi.parameters()) +
+            list(self.classifier_u.parameters()) ,
             lr=self.hparams["lr"],
             weight_decay=self.hparams['weight_decay']
         )
@@ -2598,9 +2609,10 @@ class CasualOOD_Z_only(Algorithm):
 
     def encode(self, x):
         f = self.featurizer(x)
-        logits = self.classifier(f)
-
-        return logits
+        z_u = self.projection_phi(f)
+        z_s = self.projection_psi(f)
+        u_logits = self.classifier_u(z_u)
+        return u_logits
 
 
     def predict(self, x):
@@ -2658,7 +2670,8 @@ class CasualOOD_Zu_only(Algorithm):
 
         z_u, z_s, u_logits = self.encode(all_x)
         loss_cls = F.cross_entropy(u_logits, all_y)
-        loss_mmd = self.compute_mmd(z_u, domain_labels)
+        features_by_domain = [z_u[domain_labels == d] for d in domain_labels.unique()]
+        loss_mmd = self.mmd(features_by_domain)
         dom_logits = self.domain_classifier(z_s)
         loss_dom = F.cross_entropy(dom_logits, domain_labels)
         loss_mi = self.compute_conditional_MI(z_u, z_s, all_y, self.num_classes)
@@ -2691,54 +2704,50 @@ class CasualOOD_Zu_only(Algorithm):
         z_u, z_s, u_logits = self.encode(x)
         return u_logits
 
+    def my_cdist(self, x1, x2):
+        x1_norm = x1.pow(2).sum(dim=-1, keepdim=True)
+        x2_norm = x2.pow(2).sum(dim=-1, keepdim=True)
+        res = torch.addmm(x2_norm.transpose(-2, -1), x1, x2.transpose(-2, -1), alpha=-2).add_(x1_norm)
+        return res.clamp_min_(1e-30)
 
-    @staticmethod
-    def compute_mmd(x: torch.Tensor, domain_labels: torch.Tensor,
-                    kernel_mul: float = 2.0, kernel_num: int = 5, fix_sigma=None) -> torch.Tensor:
-        unique_domains = domain_labels.unique()
-        domain_features = [x[domain_labels == dom] for dom in unique_domains]
+    def gaussian_kernel(self, x, y, gamma=[0.001, 0.01, 0.1, 1, 10, 100, 1000]):
+        D = self.my_cdist(x, y)
+        K = torch.zeros_like(D)
+        for g in gamma:
+            K.add_(torch.exp(D.mul(-g)))
+        return K
 
-        mmd_loss = 0.
-        count = 0
-        for i in range(len(domain_features)):
-            for j in range(i + 1, len(domain_features)):
-                xi = domain_features[i]
-                xj = domain_features[j]
-                if xi.size(0) < 2 or xj.size(0) < 2:
-                    continue
-                mmd_loss += CasualOODAlgorithm._mmd_pairwise(xi, xj, kernel_mul, kernel_num, fix_sigma)
-                count += 1
-
-        return mmd_loss / max(count, 1)
-
-    @staticmethod
-    def _gaussian_kernel(source, target, kernel_mul, kernel_num, fix_sigma):
-        total = torch.cat([source, target], dim=0)
-        n_samples = total.size(0)
-        L2_distance = ((total.unsqueeze(0) - total.unsqueeze(1)) ** 2).sum(2)
-
-        if fix_sigma:
-            bandwidth = fix_sigma
+    def mmd_pairwise(self, x, y):
+        kernel_type = self.hparams.get("mmd_kernel", "gaussian")
+        if kernel_type == "gaussian":
+            Kxx = self.gaussian_kernel(x, x).mean()
+            Kyy = self.gaussian_kernel(y, y).mean()
+            Kxy = self.gaussian_kernel(x, y).mean()
+            return Kxx + Kyy - 2 * Kxy
+        elif kernel_type == "mean_cov":
+            mean_x = x.mean(0, keepdim=True)
+            mean_y = y.mean(0, keepdim=True)
+            cent_x = x - mean_x
+            cent_y = y - mean_y
+            cova_x = (cent_x.t() @ cent_x) / (len(x) - 1)
+            cova_y = (cent_y.t() @ cent_y) / (len(y) - 1)
+            mean_diff = (mean_x - mean_y).pow(2).mean()
+            cova_diff = (cova_x - cova_y).pow(2).mean()
+            return mean_diff + cova_diff
         else:
-            bandwidth = torch.sum(L2_distance.data) / (n_samples**2 - n_samples)
-            bandwidth = torch.clamp(bandwidth, min=1e-3)
+            raise ValueError(f"Unsupported MMD kernel: {kernel_type}")
 
-        bandwidth /= kernel_mul ** (kernel_num // 2)
-        bandwidth_list = [bandwidth * (kernel_mul ** i) for i in range(kernel_num)]
-        kernels = [torch.exp(-L2_distance / bw) for bw in bandwidth_list]
-        return sum(kernels)
-
-    @staticmethod
-    def _mmd_pairwise(source, target, kernel_mul, kernel_num, fix_sigma):
-        n = source.size(0)
-        m = target.size(0)
-        kernels = CasualOODAlgorithm._gaussian_kernel(source, target, kernel_mul, kernel_num, fix_sigma)
-
-        XX = kernels[:n, :n].mean()
-        YY = kernels[n:, n:].mean()
-        XY = kernels[:n, n:].mean()
-        YX = kernels[n:, :n].mean()
-        return XX + YY - XY - YX
+    def mmd(self, features_by_domain):
+        """
+        Compute average pairwise MMD across multiple domains
+        """
+        total = 0.
+        count = 0
+        for i in range(len(features_by_domain)):
+            for j in range(i + 1, len(features_by_domain)):
+                total += self.mmd_pairwise(features_by_domain[i], features_by_domain[j])
+                count += 1
+        return total / max(count, 1)
 
     @staticmethod
     def compute_conditional_MI(zu, zs, y, num_classes):
