@@ -198,15 +198,14 @@ def _hparams(algorithm, dataset, random_seed):
 
     elif algorithm == 'CasualOODAlgorithm':
         _hparam('z_dim', 128, lambda r: int(r.choice([64, 128])))
-        _hparam('phase1_steps', 5000, lambda r: int(r.choice([2500, 5000])))
-        _hparam('phase2_steps', 1000, lambda r: int(r.choice([500, 1000])))
-        _hparam('finetune_steps', 1000, lambda r: int(r.choice([500, 1000])))
+        _hparam('phase1_steps', 5000, lambda r: int(r.choice([5000])))
+        _hparam('phase2_steps', 1000, lambda r: int(r.choice([1000])))
+        _hparam('finetune_steps', 1000, lambda r: int(r.choice([1000])))
         _hparam('finetune_logits', 'tilde', lambda r: r.choice(['tilde', 'combined']))
         _hparam('mi_lambda', 1., lambda r: 10**r.uniform(-1, 1))
         _hparam('mmd_lambda',  1., lambda r: 10**r.uniform(-1, 1))
         _hparam('domain_lambda',  1., lambda r: 10**r.uniform(-1, 1))
-        _hparam('mmd_kernel', 'gaussian', lambda r: r.choice(['gaussian', 'mean_cov']))
-        _hparam('mi_type', 'conditional', lambda r: r.choice(['conditional', 'cosine']))
+        _hparam('mmd_kernel', 'gaussian', lambda r: r.choice(['gaussian']))
 
 
 

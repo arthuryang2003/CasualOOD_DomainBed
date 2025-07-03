@@ -104,6 +104,9 @@ if __name__ == "__main__":
     else:
         raise NotImplementedError
 
+    if args.algorithm == "CasualOODAlgorithm":
+        args.uda_holdout_fraction = 0.2
+
     # Split each env into an 'in-split' and an 'out-split'. We'll train on
     # each in-split except the test envs, and evaluate on all splits.
 
@@ -188,7 +191,13 @@ if __name__ == "__main__":
 
     steps_per_epoch = min([len(env)/hparams['batch_size'] for env,_ in in_splits])
 
-    n_steps = args.steps or dataset.N_STEPS
+    if args.steps is None and args.algorithm == "CasualOODAlgorithm":
+        n_steps = (hparams.get('phase1_steps', 0) +
+                   hparams.get('phase2_steps', 0) +
+                   hparams.get('finetune_steps', 0))
+    else:
+        n_steps = args.steps or dataset.N_STEPS
+
     checkpoint_freq = args.checkpoint_freq or dataset.CHECKPOINT_FREQ
 
     def save_checkpoint(filename):
@@ -206,100 +215,74 @@ if __name__ == "__main__":
 
 
     last_results_keys = None
-    if args.algorithm != "CasualOODAlgorithm":
-        for step in range(start_step, n_steps):
-            step_start_time = time.time()
-            minibatches_device = [(x.to(device), y.to(device))
-                for x,y in next(train_minibatches_iterator)]
-            if args.task == "domain_adaptation":
-                uda_device = [x.to(device)
-                    for x,_ in next(uda_minibatches_iterator)]
-            else:
-                uda_device = None
-            step_vals = algorithm.update(minibatches_device, uda_device)
-            checkpoint_vals['step_time'].append(time.time() - step_start_time)
 
-            for key, val in step_vals.items():
-                checkpoint_vals[key].append(val)
+    for step in range(start_step, n_steps):
+        step_start_time = time.time()
+        minibatches_device = [(x.to(device), y.to(device))
+            for x,y in next(train_minibatches_iterator)]
+        if args.task == "domain_adaptation" or args.algorithm == "CasualOODAlgorithm":
 
-            if (step % checkpoint_freq == 0) or (step == n_steps - 1):
-                results = {
-                    'step': step,
-                    'epoch': step / steps_per_epoch,
-                }
+            uda_device = [x.to(device)
+                for x,_ in next(uda_minibatches_iterator)]
+        else:
+            uda_device = None
+        step_vals = algorithm.update(minibatches_device, uda_device)
+        checkpoint_vals['step_time'].append(time.time() - step_start_time)
 
-                for key, val in checkpoint_vals.items():
-                    results[key] = np.mean(val)
+        for key, val in step_vals.items():
+            checkpoint_vals[key].append(val)
 
-                evals = zip(eval_loader_names, eval_loaders, eval_weights)
-                for name, loader, weights in evals:
-                    acc = misc.accuracy(algorithm, loader, weights, device)
-                    results[name+'_acc'] = acc
+        if (step % checkpoint_freq == 0) or (step == n_steps - 1):
+            results = {
+                'step': step,
+                'epoch': step / steps_per_epoch,
+            }
 
-                results['mem_gb'] = torch.cuda.max_memory_allocated() / (1024.*1024.*1024.)
+            for key, val in checkpoint_vals.items():
+                results[key] = np.mean(val)
 
-                results_keys = sorted(results.keys())
-                if results_keys != last_results_keys:
-                    misc.print_row(results_keys, colwidth=12)
-                    last_results_keys = results_keys
-                misc.print_row([results[key] for key in results_keys],
-                    colwidth=12)
+            evals = zip(eval_loader_names, eval_loaders, eval_weights)
 
-                results.update({
-                    'hparams': hparams,
-                    'args': vars(args)
-                })
+            for name, loader, weights in evals:
+                acc = misc.accuracy(algorithm, loader, weights, device)
+                results[name + '_acc'] = acc
 
-                epochs_path = os.path.join(args.output_dir, 'results.jsonl')
-                with open(epochs_path, 'a') as f:
-                    f.write(json.dumps(results, sort_keys=True) + "\n")
 
-                algorithm_dict = algorithm.state_dict()
-                start_step = step + 1
-                checkpoint_vals = collections.defaultdict(lambda: [])
+            # if step > (hparams.get('phase1_steps', 0) + hparams.get('phase2_steps', 0)) and args.algorithm == "CasualOODAlgorithm":
+            #     for name, loader, weights in evals:
+            #         acc = algorithm.combined_inference(algorithm, [loader], dataset.num_classes, device)
+            #         results[name + '_acc'] = acc / 100.0
+            # else :
+            #     for name, loader, weights in evals:
+            #         acc = misc.accuracy(algorithm, loader, weights, device)
+            #         results[name + '_acc'] = acc
 
-                if args.save_model_every_checkpoint:
-                    save_checkpoint(f'model_step{step}.pkl')
+            results['mem_gb'] = torch.cuda.max_memory_allocated() / (1024.*1024.*1024.)
 
-        save_checkpoint('model.pkl')
+            results_keys = sorted(results.keys())
+            if results_keys != last_results_keys:
+                misc.print_row(results_keys, colwidth=12)
+                last_results_keys = results_keys
+            misc.print_row([results[key] for key in results_keys],
+                colwidth=12)
 
-        with open(os.path.join(args.output_dir, 'done'), 'w') as f:
-            f.write('done')
-    else:
-        total_steps = 0
+            results.update({
+                'hparams': hparams,
+                'args': vars(args)
+            })
 
-        def train_steps(phase, num_steps, iterator):
-            global total_steps
-            algorithm.set_phase(phase)
-            for _ in range(num_steps):
-                minibatches_device = [(x.to(device), y.to(device))
-                    for x, y in next(iterator)]
-                algorithm.update(minibatches_device)
-                total_steps += 1
+            epochs_path = os.path.join(args.output_dir, 'results.jsonl')
+            with open(epochs_path, 'a') as f:
+                f.write(json.dumps(results, sort_keys=True) + "\n")
 
-        train_steps(1, hparams['phase1_steps'], train_minibatches_iterator)
-        train_steps(2, hparams['phase2_steps'], train_minibatches_iterator)
+            algorithm_dict = algorithm.state_dict()
+            start_step = step + 1
+            checkpoint_vals = collections.defaultdict(lambda: [])
 
-        if len(uda_loaders):
-            uda_iter = zip(*uda_loaders)
-            train_steps(3, hparams['finetune_steps'], uda_iter)
+            if args.save_model_every_checkpoint:
+                save_checkpoint(f'model_step{step}.pkl')
 
-        results = {
-            'step': total_steps,
-            'epoch': total_steps / steps_per_epoch,
-        }
+    save_checkpoint('model.pkl')
 
-        evals = zip(eval_loader_names, eval_loaders, eval_weights)
-        # for name, loader, weights in evals:
-        #     acc = algorithm.combined_inference(algorithm, [loader], dataset.num_classes, device)
-        #     results[name + '_acc'] = acc / 100.0
-        for name, loader, weights in evals:
-            acc = misc.accuracy(algorithm, loader, weights, device)
-            results[name + '_acc'] = acc
-        results.update({'hparams': hparams, 'args': vars(args)})
-        epochs_path = os.path.join(args.output_dir, 'results.jsonl')
-        with open(epochs_path, 'a') as f:
-            f.write(json.dumps(results, sort_keys=True) + "\n")
-        save_checkpoint('model.pkl')
-        with open(os.path.join(args.output_dir, 'done'), 'w') as f:
-            f.write('done')
+    with open(os.path.join(args.output_dir, 'done'), 'w') as f:
+        f.write('done')

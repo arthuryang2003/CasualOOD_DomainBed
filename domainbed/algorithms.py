@@ -2773,6 +2773,10 @@ class CasualOODAlgorithm(CasualOOD_Zu_only):
         self.mask = nn.Parameter(torch.ones(self.z_dim))
         self.classifier_tilde_s = networks.Classifier(self.z_dim, num_classes, is_nonlinear=True)
 
+        self.phase1_steps = hparams.get('phase1_steps', 0)
+        self.phase2_steps = hparams.get('phase2_steps', 0)
+        self.finetune_steps = hparams.get('finetune_steps', 0)
+
         # 默认初始化为 phase 1 参数
         self.set_phase(1)
 
@@ -2789,12 +2793,30 @@ class CasualOODAlgorithm(CasualOOD_Zu_only):
 
     def update(self, minibatches, unlabeled=None):
         self.update_steps += 1
-        all_x = torch.cat([x for x, _ in minibatches])
-        all_y = torch.cat([y for _, y in minibatches])
-        domain_labels = torch.cat([
-            torch.full((x.size(0),), i, dtype=torch.long, device=all_x.device)
-            for i, (x, _) in enumerate(minibatches)
-        ])
+
+        if self.update_steps <= self.phase1_steps:
+            if self.phase != 1:
+                self.set_phase(1)
+        elif self.update_steps <= self.phase1_steps + self.phase2_steps:
+            if self.phase != 2:
+                self.set_phase(2)
+        else:
+            if self.phase not in (3, "finetune"):
+                self.set_phase("finetune")
+
+        if self.phase in (3, "finetune") and unlabeled is not None:
+            all_x = torch.cat(unlabeled)
+            all_y = None
+            domain_labels = None
+        else:
+            all_x = torch.cat([x for x, _ in minibatches])
+            all_y = torch.cat([y for _, y in minibatches])
+            if self.phase == 1:
+                domain_labels = torch.cat([
+                    torch.full((x.size(0),), i, dtype=torch.long, device=all_x.device)
+                    for i, (x, _) in enumerate(minibatches)
+                ])
+
 
         z_u, z_s, u_logits, s_logits, tilde_s_logits, combined_logits = self.encode(all_x)
 
@@ -2824,11 +2846,22 @@ class CasualOODAlgorithm(CasualOOD_Zu_only):
         loss.backward()
         self.optimizer.step()
 
-        return {'loss_total': loss.item()}
+
+        if self.phase == 1:
+            return {'loss_total': loss.item(),
+                    'loss_cls': loss_cls.item(),
+                    'loss_mmd': loss_mmd.item(),
+                    'loss_dom': loss_dom.item(),
+                    'loss_mi': loss_mi.item() }
+        else:
+            return {'loss':loss.item()}
 
     def predict(self, x):
-        _, _, _, _, _, combined_logits = self.encode(x)
-        return combined_logits
+        _, _, u_logits, _, _, combined_logits = self.encode(x)
+        if self.phase == 1:
+            return u_logits
+        else:
+            return combined_logits
 
     def set_phase(self, phase):
         """设置阶段并自动创建优化器"""
@@ -2861,6 +2894,130 @@ class CasualOODAlgorithm(CasualOOD_Zu_only):
 
     def get_parameters_finetune(self):
         return list(self.classifier_tilde_s.parameters()) + [self.mask]
+
+    @staticmethod
+    def combined_inference(model, loader, num_classes, device):
+        """Perform pseudo-label based combined inference.
+
+        Args:
+            model: model with encode() method
+            loader: single DataLoader (not a list)
+            num_classes: int, number of output classes
+            device: torch.device
+        Returns:
+            Accuracy (%) after combining stable and unstable logits
+        """
+        model.eval()
+
+        if num_classes == 2:
+            # Step 1: Estimate PY, e0, e1
+            PY = 0.0
+            n1 = 0
+            n = 0
+            e0 = 0.0
+            e1 = 0.0
+
+            with torch.no_grad():
+                for x, y in loader:
+                    x = x.to(device)
+                    y = y.to(device).float()
+
+                    z_u, z_s, u_logits, s_logits, tilde_s_logits, _ = model.encode(x)
+                    y_stable = torch.sigmoid(u_logits).squeeze()
+
+                    PY += y_stable.sum().item()
+                    n1 += y_stable.sum().item()
+                    n += y_stable.size(0)
+
+                    e0 += ((1 - y_stable) ** 2).sum().item()
+                    e1 += (y_stable ** 2).sum().item()
+
+            e0 = e0 / (n - n1 + 1e-6)
+            e1 = e1 / (n1 + 1e-6)
+            PY = PY / n
+
+            # Step 2: Corrected inference
+            correct = 0
+            total = 0
+            with torch.no_grad():
+                for x, y in loader:
+                    x = x.to(device)
+                    y = y.to(device).float()
+
+                    z_u, z_s, u_logits, s_logits, tilde_s_logits, _ = model.encode(x)
+                    y_stable = torch.sigmoid(u_logits).squeeze()
+                    y_unstable = torch.sigmoid(tilde_s_logits).squeeze()
+
+                    x_logit = torch.logit(y_stable, eps=1e-6)
+                    y_unstable_corrected = (y_unstable + e0 - 1) / (e1 + e0 - 1 + 1e-6)
+                    y_unstable_corrected = torch.clamp(y_unstable_corrected, min=0, max=1)
+                    u_logit = torch.logit(y_unstable_corrected, eps=1e-6)
+
+                    combined_logit = x_logit + u_logit - np.log(PY / (1 - PY + 1e-6))
+                    predict = torch.sigmoid(combined_logit)
+                    predicted = (predict > 0.5).long()
+
+                    correct += (predicted == y.long()).sum().item()
+                    total += y.size(0)
+
+            return correct / total * 100.0
+
+        else:
+            # Step 1: Estimate PY and e_matrix
+            PY_raw = torch.zeros(num_classes).to(device)
+            y_soft_all = []
+
+            with torch.no_grad():
+                for x, y in loader:
+                    x = x.to(device)
+                    z_u, z_s, u_logits, s_logits, tilde_s_logits, _ = model.encode(x)
+                    stable_pred = F.softmax(u_logits, dim=1)
+                    y_soft_all.append(stable_pred)
+                    PY_raw += stable_pred.sum(dim=0)
+
+            PY = PY_raw / PY_raw.sum()
+            y_soft_all = torch.cat(y_soft_all, dim=0)
+            e_matrix = y_soft_all.T @ F.normalize(y_soft_all, p=1, dim=1)
+
+            # Step 2: Corrected inference
+            correct = 0
+            total = 0
+
+            with torch.no_grad():
+                for x, y in loader:
+                    x = x.to(device)
+                    y = y.to(device)
+
+                    z_u, z_s, u_logits, s_logits, tilde_s_logits, _ = model.encode(x)
+                    stable_pred_softmax = F.softmax(u_logits, dim=1)
+                    unstable_pred_softmax = F.softmax(tilde_s_logits, dim=1)
+
+                    unstable_pred_corrected = model.least_squares_correction(
+                        unstable_pred_softmax, e_matrix
+                    )
+
+                    stable_logit = torch.log(stable_pred_softmax + 1e-6)
+                    unstable_logit = torch.log(unstable_pred_corrected + 1e-6)
+                    combined_logit = stable_logit + unstable_logit - torch.log(PY + 1e-6)
+                    predict = F.softmax(combined_logit, dim=1)
+
+                    predicted = torch.argmax(predict, dim=1)
+                    correct += (predicted == y).sum().item()
+                    total += y.size(0)
+
+            return correct / total * 100.0
+
+    @staticmethod
+    def least_squares_correction(Y_unstable, e_matrix):
+        """Iteratively solve a least squares correction for unstable predictions."""
+        p = torch.ones_like(Y_unstable) / Y_unstable.size(1)
+
+        for _ in range(1000):
+            gradient = torch.matmul(e_matrix, p.T) - Y_unstable.T
+            p = p - 0.01 * gradient.T
+            p = F.softmax(p, dim=1)
+
+        return p
 
 
 # class CasualOODAlgorithm(Algorithm):

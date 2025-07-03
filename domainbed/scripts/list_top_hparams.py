@@ -139,6 +139,7 @@ if __name__ == "__main__":
         for group in records:
             print(f"trial_seed: {group['trial_seed']}")
             best_hparams = selection_method.hparams_accs(group['records'])
+            best_hparams = best_hparams[:1]
             for run_acc, hparam_records in best_hparams:
                 print(f"\t{run_acc}")
                 for r in hparam_records:
