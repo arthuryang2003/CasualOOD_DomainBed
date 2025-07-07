@@ -124,32 +124,6 @@ python -m domainbed.scripts.sweep launch\
        --n_trials 1
 ```
 ```sh
-python -m domainbed.scripts.sweep launch\
-       --data_dir=./domainbed/data\
-       --output_dir=./output/path\
-       --command_launcher local\
-       --algorithms IRM \
-       --datasets PACS\
-       --n_hparams 5\
-       --n_trials 1\
-       --single_test_envs\
-       --skip_confirmation\
-       
-```
-
-python -m domainbed.scripts.sweep launch\
-       --data_dir=./domainbed/data\
-       --output_dir=./output/path\
-       --command_launcher local\
-       --algorithms CasualOODAlgorithm \
-       --datasets PACS\
-       --n_hparams 1\
-       --n_trials 1\
-       --single_test_envs\
-       --skip_confirmation\
-       
-After all jobs have either succeeded or failed, you can delete the data from failed jobs with ``python -m domainbed.scripts.sweep delete_incomplete`` and then re-launch them by running ``python -m domainbed.scripts.sweep launch`` again. Specify the same command-line arguments in all calls to `sweep` as you did the first time; this is how the sweep script knows which jobs were launched originally.
-
 CUDA_VISIBLE_DEVICES=5,6,7 \
 python -m domainbed.scripts.sweep launch \
     --data_dir=./domainbed/data \
@@ -161,27 +135,28 @@ python -m domainbed.scripts.sweep launch \
     --n_trials 3 \
     --single_test_envs \
     --skip_confirmation
-python -m domainbed.scripts.sweep launch \
-    --data_dir=./domainbed/data \
-    --output_dir=./output/Main_w_CI \
-    --command_launcher smart_gpu \
-    --algorithms CasualOODAlgorithm \
-    --datasets ColoredMNIST \
-    --n_hparams 10 \
-    --n_trials 3 \
-    --single_test_envs \
-    --skip_confirmation
+    
+```
+
+
+       
+After all jobs have either succeeded or failed, you can delete the data from failed jobs with ``python -m domainbed.scripts.sweep delete_incomplete`` and then re-launch them by running ``python -m domainbed.scripts.sweep launch`` again. Specify the same command-line arguments in all calls to `sweep` as you did the first time; this is how the sweep script knows which jobs were launched originally.
+
+
 
 To view the results of your sweep:
 
 ````sh
 python -m domainbed.scripts.collect_results\
-       --input_dir=/my/sweep/output/path
+       --input_dir=./output/Zu_mi_mmd \
 ````
-python -m domainbed.scripts.collect_results\
-       --input_dir=./output/path\
 
-python -m domainbed.scripts.list_top_hparams        --input_dir=./output/Zu_mmd --dataset=ColoredMNIST --algorithm=CasualOOD_Zu_only --test_env=2
+List top haparams  of your sweep:
+
+````sh
+python -m domainbed.scripts.list_top_hparams        --input_dir=./output/Main_wo_MMD --dataset=ColoredMNIST --algorithm=CasualOODAlgorithm --test_env=2
+       --input_dir=./output/Zu_mi_mmd \
+````
 
 ## Running unit tests
 

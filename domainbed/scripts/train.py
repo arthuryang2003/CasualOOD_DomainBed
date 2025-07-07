@@ -243,19 +243,19 @@ if __name__ == "__main__":
 
             evals = zip(eval_loader_names, eval_loaders, eval_weights)
 
-            for name, loader, weights in evals:
-                acc = misc.accuracy(algorithm, loader, weights, device)
-                results[name + '_acc'] = acc
+            # for name, loader, weights in evals:
+            #     acc = misc.accuracy(algorithm, loader, weights, device)
+            #     results[name + '_acc'] = acc
 
 
-            # if step > (hparams.get('phase1_steps', 0) + hparams.get('phase2_steps', 0)) and args.algorithm == "CasualOODAlgorithm":
-            #     for name, loader, weights in evals:
-            #         acc = algorithm.combined_inference(algorithm, [loader], dataset.num_classes, device)
-            #         results[name + '_acc'] = acc / 100.0
-            # else :
-            #     for name, loader, weights in evals:
-            #         acc = misc.accuracy(algorithm, loader, weights, device)
-            #         results[name + '_acc'] = acc
+            if step > (hparams.get('phase1_steps', 0) + hparams.get('phase2_steps', 0)) and args.algorithm == "CasualOODAlgorithm":
+                for name, loader, weights in evals:
+                    acc = algorithm.combined_inference(algorithm, [loader], dataset.num_classes, device)
+                    results[name + '_acc'] = acc / 100.0
+            else :
+                for name, loader, weights in evals:
+                    acc = misc.accuracy(algorithm, loader, weights, device)
+                    results[name + '_acc'] = acc
 
             results['mem_gb'] = torch.cuda.max_memory_allocated() / (1024.*1024.*1024.)
 
