@@ -99,8 +99,8 @@ python3 -m domainbed.scripts.train\
 ```
 python3 -m domainbed.scripts.train\
        --data_dir=./domainbed/data/ \
-       --algorithm CasualOODAlgorithm\
-       --dataset ColoredMNIST\
+       --algorithm ERM\
+       --dataset CelebA_Blond \
        --uda_holdout_fraction=0.2 \
        --test_env 2
 
@@ -129,8 +129,8 @@ python -m domainbed.scripts.sweep launch \
     --data_dir=./domainbed/data \
     --output_dir=./output/Main \
     --command_launcher smart_gpu \
-    --algorithms CasualOOD_Zu_only \
-    --datasets ColoredMNIST \
+    --algorithms ERM IRM MMD \
+    --datasets CelebA_Blond \
     --n_hparams 20 \
     --n_trials 3 \
     --single_test_envs \

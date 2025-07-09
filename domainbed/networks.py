@@ -9,7 +9,8 @@ from domainbed.lib import wide_resnet
 import copy
 
 import timm
-
+import os
+os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
 
 def remove_batch_norm_from_resnet(model):
     fuse = torch.nn.utils.fusion.fuse_conv_bn_eval
