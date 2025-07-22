@@ -127,14 +127,15 @@ python -m domainbed.scripts.sweep launch\
 CUDA_VISIBLE_DEVICES=5,6,7 \
 python -m domainbed.scripts.sweep launch \
     --data_dir=./domainbed/data \
-    --output_dir=./output/Main \
+    --output_dir=./output/Main_wo_MMD \
     --command_launcher smart_gpu \
-    --algorithms ERM IRM MMD \
+    --algorithms CasualOODAlgorithm \
     --datasets CelebA_Blond \
     --n_hparams 20 \
     --n_trials 3 \
     --single_test_envs \
-    --skip_confirmation
+    --skip_confirmation \
+    --one_test_env
     
 ```
 
