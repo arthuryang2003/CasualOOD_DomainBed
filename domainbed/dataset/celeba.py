@@ -31,7 +31,7 @@ for i_ter, value in enumerate(split_array):
 attrs_df = pd.read_csv(
     os.path.join(root_dir, 'list_attr_celeba.csv'))
 # Split out filenames and attribute names
-data_dir = os.path.join(root_dir, 'img_align_celeba')
+data_dir = os.path.join(root_dir, 'img_align_celeba2')
 filename_array = attrs_df['image_id'].values
 filename_array = np.array([os.path.join(data_dir, x) for x in filename_array])
 attrs_df = attrs_df.drop(labels='image_id', axis='columns')

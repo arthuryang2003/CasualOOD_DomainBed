@@ -13,7 +13,10 @@ from torchvision.transforms.functional import rotate
 
 from wilds.datasets.camelyon17_dataset import Camelyon17Dataset
 from wilds.datasets.fmow_dataset import FMoWDataset
+import pickle
+import pandas as pd
 
+from PIL import UnidentifiedImageError
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 DATASETS = [
@@ -41,6 +44,7 @@ DATASETS = [
     # "SpawriousM2M_medium",
     # "SpawriousM2M_hard",
     'CelebA_Blond',
+    "NICOMixed",
 ]
 
 def get_dataset_class(dataset_name):
@@ -98,6 +102,49 @@ class MultipleDomainDataset:
     def __len__(self):
         return len(self.datasets)
 
+    def get_transform(self, input_size, normalize, scheme):
+        if scheme == 'domainbed':
+            augment_transform = transforms.Compose([
+                # transforms.Resize((224,224)),
+                transforms.RandomResizedCrop(input_size, scale=(0.7, 1.0)),
+                transforms.RandomHorizontalFlip(),
+                transforms.ColorJitter(0.3, 0.3, 0.3, 0.3),
+                transforms.RandomGrayscale(),
+                transforms.ToTensor(),
+                normalize
+            ])
+
+        elif scheme == 'jigen':
+            augment_transform = transforms.Compose([
+                # transforms.Resize((224,224)),
+                transforms.RandomResizedCrop(input_size, scale=(0.8, 1.0)),
+                transforms.RandomHorizontalFlip(),
+                transforms.ColorJitter(0.4, 0.4, 0.4, 0.4),
+                transforms.RandomGrayscale(),
+                transforms.ToTensor(),
+                normalize
+            ])
+        elif scheme == 'decaug_nico':
+            augment_transform = transforms.Compose([
+                transforms.RandomResizedCrop(input_size),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                normalize
+            ])
+        elif scheme == 'jigen_wo_color_aug':
+            augment_transform = transforms.Compose([
+                # transforms.Resize((224,224)),
+                transforms.RandomResizedCrop(input_size, scale=(0.8, 1.0)),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                normalize
+            ])
+        else:
+            raise NotImplementedError
+
+        return augment_transform
+
+
 
 class Debug(MultipleDomainDataset):
     def __init__(self, root, test_envs, hparams):
@@ -122,72 +169,260 @@ class Debug224(Debug):
     ENVIRONMENTS = ['0', '1', '2']
 
 
-class CelebA_Environment(Dataset):
-    def __init__(self, target_attribute_id, split_csv, img_dir, transform=None):
-        self.img_dir = img_dir
+class NICOMixedEnvironment(torch.utils.data.Dataset):
+    def __init__(self, images_root, csv_file_path, input_shape, transform):
+        super().__init__()
+        self.label_dict = {'animal': 0, 'vehicle': 1}
         self.transform = transform
-        file_names = []
-        attributes = []
-        with open(split_csv) as f:
-            reader = csv.reader(f)
-            next(reader)  # discard header
-            for row in reader:
-                file_names.append(row[0])
-                attributes.append(np.array(row[1:], dtype=int))
-        attributes = np.stack(attributes, axis=0)
-        self.samples = list(zip(file_names, list(attributes[:, target_attribute_id])))
+        self.img_paths = []
+        self.targets = []
+        with open(csv_file_path) as f:
+            for line in f.readlines():
+                img_path, category_name, context_name, superclass = line.strip().split(',')
+                img_path = img_path.replace('\\', '/')
+                img_path = img_path.replace('_', ' ')
+                full_path = f'{images_root}/{superclass}/{img_path}'
+                # if not os.path.exists(full_path):
+                #     print(f"[Warning] File not found and skipped: {full_path}")
+                #     continue
+
+                self.img_paths.append(full_path)
+                self.targets.append(self.label_dict[superclass])
 
     def __len__(self):
-        return len(self.samples)
+        return len(self.targets)
 
-    def __getitem__(self, index):
-        file_name, label = self.samples[index]
-        image = Image.open(Path(self.img_dir, file_name))
-        if self.transform:
+    def __getitem__(self, key):
+        with open(self.img_paths[key], 'rb') as f:
+            image = Image.open(f).convert('RGB')
             image = self.transform(image)
-        label = torch.tensor(label)
-        return image, label
+        return image, self.targets[key]
 
-class CelebA_Blond(MultipleDomainDataset):
+
+
+
+class NICOMixed(MultipleDomainDataset):
+    #     ENVIRONMENTS = ["train1", "train2", "train3", "train4", "val", "test"]
+    ENVIRONMENTS = ["train1", "train2", "val", "test"]
     CHECKPOINT_FREQ = 200
-    ENVIRONMENTS = ['tr_env1', 'tr_env2', 'te_env']
-    TARGET_ATTRIBUTE_ID = 9
+
     def __init__(self, root, test_envs, hparams):
-        super().__init__()
-        if 'data_augmentation_scheme' in hparams:
-            raise NotImplementedError(
-                'CelebA_Blond has its own data augmentation scheme')
+        self.input_shape = (3, 224, 224)
+        self.datasets = []
+        self.num_classes = 2
+
+        normalize = transforms.Normalize(
+            mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
         transform = transforms.Compose([
-            transforms.CenterCrop(178),  # crop the face at the center, no stretching
-            transforms.Resize((224, 224)),
+            transforms.Resize((int(self.input_shape[1] / 0.875), int(self.input_shape[2] / 0.875))),
+            transforms.CenterCrop(self.input_shape[1]),
             transforms.ToTensor(),
-            get_normalize(),
+            normalize
         ])
 
-        augment_transform = transforms.Compose([
-            transforms.RandomResizedCrop((224, 224), scale=(0.7, 1.0),
-                                         ratio=(1.0, 1.3333333333333333)),
-            transforms.ColorJitter(0.3, 0.3, 0.3, 0.0),  # do not alter hue
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            get_normalize(),
-        ])
+        augment_transform = self.get_transform(
+            self.input_shape[1], normalize, hparams.get('data_augmentation_scheme', 'domainbed'))
 
-        img_dir = Path(root, 'celeba', 'img_align_celeba','img_align_celeba')
-        self.datasets = []
         for i, env_name in enumerate(self.ENVIRONMENTS):
             if hparams['data_augmentation'] and (i not in test_envs):
                 env_transform = augment_transform
             else:
                 env_transform = transform
-            split_csv = Path(root, 'celeba', f'{env_name}.csv')
-            dataset = CelebA_Environment(self.TARGET_ATTRIBUTE_ID, split_csv, img_dir,
-                                         env_transform)
-            self.datasets.append(dataset)
+            csv_file_path = os.path.join(f'{root}/NICO/mixed_split_corrected/env_{env_name}.csv')
+            self.datasets.append(NICOMixedEnvironment(f'{root}/NICO', csv_file_path, self.input_shape, env_transform))
+
+
+class CelebA(torch.utils.data.Dataset):
+    def __init__(self, dataframe, folder_dir, target_id, transform=None, cdiv=0, ccor=0):
+        self.dataframe = dataframe
+        self.folder_dir = folder_dir
+        self.target_id = target_id
+        self.transform = transform
+        self.file_names = dataframe.index
+        self.targets = np.concatenate(dataframe.labels.values).astype(int)
+        gender_id = 20
+
+        target_idx0 = np.where(self.targets[:, target_id] == 0)[0]
+        target_idx1 = np.where(self.targets[:, target_id] == 1)[0]
+        gender_idx0 = np.where(self.targets[:, gender_id] == 0)[0]
+        gender_idx1 = np.where(self.targets[:, gender_id] == 1)[0]
+        nontarget_males = list(set(gender_idx1) & set(target_idx0))
+        nontarget_females = list(set(gender_idx0) & set(target_idx0))
+        target_males = list(set(gender_idx1) & set(target_idx1))
+        target_females = list(set(gender_idx0) & set(target_idx1))
+
+        u1 = len(nontarget_males) - int((1 - ccor) * (len(nontarget_males) - len(nontarget_females)))
+        u2 = len(target_females) - int((1 - ccor) * (len(target_females) - len(target_males)))
+        selected_idx = nontarget_males[:u1] + nontarget_females + target_males + target_females[:u2]
+        self.targets = self.targets[selected_idx]
+        self.file_names = self.file_names[selected_idx]
+
+        target_idx0 = np.where(self.targets[:, target_id] == 0)[0]
+        target_idx1 = np.where(self.targets[:, target_id] == 1)[0]
+        gender_idx0 = np.where(self.targets[:, gender_id] == 0)[0]
+        gender_idx1 = np.where(self.targets[:, gender_id] == 1)[0]
+        nontarget_males = list(set(gender_idx1) & set(target_idx0))
+        nontarget_females = list(set(gender_idx0) & set(target_idx0))
+        target_males = list(set(gender_idx1) & set(target_idx1))
+        target_females = list(set(gender_idx0) & set(target_idx1))
+
+        selected_idx = nontarget_males + nontarget_females[
+                                         :int(len(nontarget_females) * (1 - cdiv))] + target_males + target_females[
+                                                                                                     :int(
+                                                                                                         len(target_females) * (
+                                                                                                                     1 - cdiv))]
+        self.targets = self.targets[selected_idx]
+        self.file_names = self.file_names[selected_idx]
+
+        target_idx0 = np.where(self.targets[:, target_id] == 0)[0]
+        target_idx1 = np.where(self.targets[:, target_id] == 1)[0]
+        gender_idx0 = np.where(self.targets[:, gender_id] == 0)[0]
+        gender_idx1 = np.where(self.targets[:, gender_id] == 1)[0]
+        nontarget_males = list(set(gender_idx1) & set(target_idx0))
+        nontarget_females = list(set(gender_idx0) & set(target_idx0))
+        target_males = list(set(gender_idx1) & set(target_idx1))
+        target_females = list(set(gender_idx0) & set(target_idx1))
+        print(len(nontarget_males), len(nontarget_females), len(target_males), len(target_females))
+
+        self.targets = self.targets[:, self.target_id]
+
+    def __len__(self):
+        return len(self.targets)
+
+    def __getitem__(self, index):
+        image = Image.open(os.path.join(self.folder_dir, self.file_names[index]))
+        label = self.targets[index]
+        if self.transform:
+            image = self.transform(image)
+        return image, label
+
+
+class CelebA_Blond(MultipleDomainDataset):
+    ENVIRONMENTS = ["unbalanced_1", "unbalanced_2", "balanced"]
+    N_STEPS = 2001
+    CHECKPOINT_FREQ = 200
+
+    def __init__(self, root, test_envs, hparams):
+        super().__init__()
+        environments = self.ENVIRONMENTS
+        print(environments)
 
         self.input_shape = (3, 224, 224,)
         self.num_classes = 2  # blond or not
+
+        dataframes = []
+        for env_name in ('tr_env1', 'tr_env2', 'te_env'):
+            with open(f'{root}/celeba/blond_split/{env_name}_df.pickle', 'rb') as handle:
+                dataframes.append(pickle.load(handle))
+        tr_env1, tr_env2, te_env = dataframes
+
+        orig_w = 178
+        orig_h = 218
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        images_path = f'{root}/celeba/img_align_celeba'
+        transform = transforms.Compose([
+            transforms.CenterCrop(min(orig_w, orig_h)),
+            transforms.Resize(self.input_shape[1:]),
+            transforms.ToTensor(),
+            normalize,
+        ])
+
+        if hparams['data_augmentation']:
+            augment_transform = transforms.Compose([
+                transforms.RandomResizedCrop(self.input_shape[1:],
+                                             scale=(0.7, 1.0), ratio=(1.0, 1.3333333333333333)),
+                transforms.ColorJitter(0.3, 0.3, 0.3, 0.0),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                normalize
+            ])
+
+            if hparams.get('test_data_augmentation', False):
+                transform = augment_transform
+        else:
+            augment_transform = transform
+
+        cdiv = hparams.get('cdiv', 0)
+        ccor = hparams.get('ccor', 1)
+
+        target_id = 9
+        tr_dataset_1 = CelebA(pd.DataFrame(tr_env1), images_path, target_id, transform=augment_transform,
+                              cdiv=cdiv, ccor=ccor)
+        tr_dataset_2 = CelebA(pd.DataFrame(tr_env2), images_path, target_id, transform=augment_transform,
+                              cdiv=cdiv, ccor=ccor)
+        te_dataset = CelebA(pd.DataFrame(te_env), images_path, target_id, transform=transform)
+
+        self.datasets = [tr_dataset_1, tr_dataset_2, te_dataset]
+
+
+#
+# class CelebA_Environment(Dataset):
+#     def __init__(self, target_attribute_id, split_csv, img_dir, transform=None):
+#         self.img_dir = img_dir
+#         self.transform = transform
+#         file_names = []
+#         attributes = []
+#         with open(split_csv) as f:
+#             reader = csv.reader(f)
+#             next(reader)  # discard header
+#             for row in reader:
+#                 file_names.append(row[0])
+#                 attributes.append(np.array(row[1:], dtype=int))
+#         attributes = np.stack(attributes, axis=0)
+#         self.samples = list(zip(file_names, list(attributes[:, target_attribute_id])))
+#
+#     def __len__(self):
+#         return len(self.samples)
+#
+#     def __getitem__(self, index):
+#         file_name, label = self.samples[index]
+#         image = Image.open(Path(self.img_dir, file_name))
+#         if self.transform:
+#             image = self.transform(image)
+#         label = torch.tensor(label)
+#         return image, label
+#
+# class CelebA_Blond(MultipleDomainDataset):
+#     CHECKPOINT_FREQ = 200
+#     ENVIRONMENTS = ['tr_env1', 'tr_env2', 'te_env']
+#     TARGET_ATTRIBUTE_ID = 9
+#     def __init__(self, root, test_envs, hparams):
+#         super().__init__()
+#         if 'data_augmentation_scheme' in hparams:
+#             raise NotImplementedError(
+#                 'CelebA_Blond has its own data augmentation scheme')
+#
+#         transform = transforms.Compose([
+#             transforms.CenterCrop(178),  # crop the face at the center, no stretching
+#             transforms.Resize((224, 224)),
+#             transforms.ToTensor(),
+#             get_normalize(),
+#         ])
+#
+#         augment_transform = transforms.Compose([
+#             transforms.RandomResizedCrop((224, 224), scale=(0.7, 1.0),
+#                                          ratio=(1.0, 1.3333333333333333)),
+#             transforms.ColorJitter(0.3, 0.3, 0.3, 0.0),  # do not alter hue
+#             transforms.RandomHorizontalFlip(),
+#             transforms.ToTensor(),
+#             get_normalize(),
+#         ])
+#
+#         img_dir = Path(root, 'celeba', 'img_align_celeba')
+#         self.datasets = []
+#         for i, env_name in enumerate(self.ENVIRONMENTS):
+#             if hparams['data_augmentation'] and (i not in test_envs):
+#                 env_transform = augment_transform
+#             else:
+#                 env_transform = transform
+#             split_csv = Path(root, 'celeba', f'{env_name}.csv')
+#             dataset = CelebA_Environment(self.TARGET_ATTRIBUTE_ID, split_csv, img_dir,
+#                                          env_transform)
+#             self.datasets.append(dataset)
+#
+#         self.input_shape = (3, 224, 224,)
+#         self.num_classes = 2  # blond or not
 
 
 class MultipleEnvironmentMNIST(MultipleDomainDataset):

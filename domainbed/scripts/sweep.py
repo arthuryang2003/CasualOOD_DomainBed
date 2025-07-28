@@ -96,13 +96,13 @@ def all_test_env_combinations(n):
             yield [i, j]
 
 def make_args_list(n_trials, dataset_names, algorithms, n_hparams_from, n_hparams, steps,
-    data_dir, task, holdout_fraction, single_test_envs,one_test_env, hparams):
+    data_dir, task, holdout_fraction, single_test_envs,fixed_test_envs, hparams):
     args_list = []
     for trial_seed in range(n_trials):
         for dataset in dataset_names:
             for algorithm in algorithms:
-                if one_test_env:
-                    all_test_envs=[datasets.num_environments(dataset)-1]
+                if fixed_test_envs:
+                    all_test_envs = [fixed_test_envs]
                 elif single_test_envs:
                     all_test_envs = [
                         [i] for i in range(datasets.num_environments(dataset))]
@@ -155,7 +155,9 @@ if __name__ == "__main__":
     parser.add_argument('--holdout_fraction', type=float, default=0.2)
     parser.add_argument('--single_test_envs', action='store_true')
     parser.add_argument('--skip_confirmation', action='store_true')
-    parser.add_argument('--one_test_env', action='store_true')
+    parser.add_argument('--fixed_test_envs', type=int, nargs='+', default=[],
+        help='Use a fixed set of environments for testing. Setting the argument '
+             'disables leave-one-domain-out training.')
     args = parser.parse_args()
 
     args_list = make_args_list(
@@ -169,7 +171,7 @@ if __name__ == "__main__":
         task=args.task,
         holdout_fraction=args.holdout_fraction,
         single_test_envs=args.single_test_envs,
-        one_test_env=args.one_test_env,
+        fixed_test_envs=args.fixed_test_envs,
         hparams=args.hparams
     )
 

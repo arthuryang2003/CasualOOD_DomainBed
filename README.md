@@ -100,7 +100,7 @@ python3 -m domainbed.scripts.train\
 python3 -m domainbed.scripts.train\
        --data_dir=./domainbed/data/ \
        --algorithm ERM\
-       --dataset CelebA_Blond \
+       --dataset NICOMixed \
        --uda_holdout_fraction=0.2 \
        --test_env 2
 
@@ -127,15 +127,15 @@ python -m domainbed.scripts.sweep launch\
 CUDA_VISIBLE_DEVICES=5,6,7 \
 python -m domainbed.scripts.sweep launch \
     --data_dir=./domainbed/data \
-    --output_dir=./output/Main_wo_MMD \
+    --output_dir=./output/test \
     --command_launcher smart_gpu \
     --algorithms CasualOODAlgorithm \
     --datasets CelebA_Blond \
-    --n_hparams 20 \
-    --n_trials 3 \
-    --single_test_envs \
+    --n_hparams 1 \
+    --n_trials 1 \
+    --fixed_test_envs 2 \
     --skip_confirmation \
-    --one_test_env
+
     
 ```
 

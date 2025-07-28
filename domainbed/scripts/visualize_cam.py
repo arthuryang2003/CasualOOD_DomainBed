@@ -1,5 +1,7 @@
 import argparse
 import os
+from typing import Optional
+
 import torch
 from torchvision.transforms.functional import to_pil_image
 from torchcam.methods import GradCAM
@@ -52,11 +54,6 @@ def find_best_model_dir(input_dir: str, dataset: str, algorithm: str, test_env: 
             r['test_env'] == args.test_env
     )
 
-    # records = reporting.load_records(input_dir)
-    # records = reporting.get_grouped_records(records)
-    # records = records.filter(
-    #     lambda r: r['dataset'] == dataset and r['algorithm'] == algorithm and r['test_env'] == test_env
-    # )
 
     if not len(records):
         raise RuntimeError('No records found for the specified configuration')
@@ -91,6 +88,43 @@ def load_model(checkpoint_path: str) -> algorithms.Algorithm:
     model.load_state_dict(ckpt['model_dict'])
     return model
 
+def check_constant_predictions(model: algorithms.Algorithm,
+                               data_loader: torch.utils.data.DataLoader,
+                               device: str) -> Optional[int]:
+    """Return 0 or 1 if the model predicts the same class for all samples.
+
+    Parameters
+    ----------
+    model : algorithms.Algorithm
+        Loaded model to evaluate.
+    data_loader : DataLoader
+        Data loader containing samples to evaluate on.
+    device : str
+        Device on which computation is performed.
+
+    Returns
+    -------
+    int | None
+        ``0`` if all predictions are class ``0``, ``1`` if all predictions are
+        class ``1`` and ``None`` otherwise.
+    """
+
+    model.eval()
+    preds = []
+    with torch.no_grad():
+        for x, _ in data_loader:
+            x = x.to(device)
+            logits = model.predict(x)
+            preds.append(logits.argmax(1).cpu())
+
+    if not preds:
+        return None
+
+    preds = torch.cat(preds)
+    unique = torch.unique(preds)
+    if len(unique) == 1 and unique.item() in (0, 1):
+        return int(unique.item())
+    return None
 
 def main(args):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -108,12 +142,13 @@ def main(args):
         args.data_dir, [args.test_env], model.hparams)
     test_loader = FastDataLoader(dataset[args.test_env], batch_size=1,
                                  num_workers=dataset.N_WORKERS)
+    constant_class = check_constant_predictions(model, test_loader, device)
+    if constant_class is not None:
+        print(f"Model predicts only class {constant_class} on the test set.")
 
     out_dir = os.path.join('visualize', args.algorithm, args.dataset)
     os.makedirs(out_dir, exist_ok=True)
 
-    target_layer = find_last_conv(model.featurizer)
-    cam_extractor = GradCAM(model, target_layer=target_layer)
 
     selected = {0: [], 1: []}
     max_per_class = 5
@@ -130,9 +165,11 @@ def main(args):
             prd_i = prd.item()
             if lbl_i in selected and prd_i == lbl_i and len(selected[lbl_i]) < max_per_class:
                 selected[lbl_i].append(img.unsqueeze(0))
-        cam_extractor.clear_hooks()
 
-    for label_class in [0, 1]:
+    target_layer = find_last_conv(model.featurizer)
+    cam_extractor = GradCAM(model, target_layer=target_layer)
+
+    for label_class in [0,1]:
         for idx, img in enumerate(selected[label_class]):
             img = img.to(device)
             img.requires_grad_()
