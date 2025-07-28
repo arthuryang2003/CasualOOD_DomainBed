@@ -139,8 +139,14 @@ python -m domainbed.scripts.sweep launch \
     
 ```
 
-
+python -m domainbed.scripts.visualize_cam \
+    --data_dir=./domainbed/data \
+    --input_dir=./output/Main_wo_MMD \
+    --dataset=ColoredMNIST \
+    --algorithm=CasualOODAlgorithm \
+    --test_env=2
        
+
 After all jobs have either succeeded or failed, you can delete the data from failed jobs with ``python -m domainbed.scripts.sweep delete_incomplete`` and then re-launch them by running ``python -m domainbed.scripts.sweep launch`` again. Specify the same command-line arguments in all calls to `sweep` as you did the first time; this is how the sweep script knows which jobs were launched originally.
 
 
