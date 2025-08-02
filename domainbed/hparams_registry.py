@@ -196,6 +196,13 @@ def _hparams(algorithm, dataset, random_seed):
         _hparam('domain_lambda',  1., lambda r: 10**r.uniform(-1, 1))
         # _hparam('mmd_kernel', 'gaussian', lambda r: r.choice(['gaussian', 'mean_cov']))
 
+    elif algorithm == 'VITA_Zu_only':
+        _hparam('z_dim', 64, lambda r: int(r.choice([32, 128])))
+        _hparam('mi_lambda', 1., lambda r: 10**r.uniform(-1, 1))
+        _hparam('domain_lambda',  1., lambda r: 10**r.uniform(-1, 1))
+        _hparam('irm_lambda', 1e2, lambda r: 10**r.uniform(-1, 5))
+        _hparam('irm_penalty_anneal_iters', 500, lambda r: int(10**r.uniform(0, 4)))
+
     elif algorithm == 'CasualOODAlgorithm':
         _hparam('z_dim', 128, lambda r: int(r.choice([64, 128])))
         _hparam('phase1_steps', 5000, lambda r: int(r.choice([5000])))
