@@ -75,18 +75,30 @@ def find_best_model_dir(input_dir: str, dataset: str, algorithm: str, test_env: 
 
     return best_dir
 
-
-def load_model(checkpoint_path: str) -> algorithms.Algorithm:
-    ckpt = torch.load(checkpoint_path, map_location='cpu')
-    alg_class = algorithms.get_algorithm_class(ckpt['args']['algorithm'])
+def load_model(model_pkl):
+    checkpoint = torch.load(model_pkl, map_location="cpu")
+    alg_name = checkpoint["args"]["algorithm"]
+    alg_class = algorithms.get_algorithm_class(alg_name)
     model = alg_class(
-        ckpt['model_input_shape'],
-        ckpt['model_num_classes'],
-        ckpt['model_num_domains'],
-        ckpt['model_hparams'],
+        checkpoint["model_input_shape"],
+        checkpoint["model_num_classes"],
+        checkpoint["model_num_domains"],
+        checkpoint["model_hparams"]   # 包含 nonlinear_classifier
     )
-    model.load_state_dict(ckpt['model_dict'])
+    model.load_state_dict(checkpoint["model_dict"])
     return model
+
+# def load_model(checkpoint_path: str) -> algorithms.Algorithm:
+#     ckpt = torch.load(checkpoint_path, map_location='cpu')
+#     alg_class = algorithms.get_algorithm_class(ckpt['args']['algorithm'])
+#     model = alg_class(
+#         ckpt['model_input_shape'],
+#         ckpt['model_num_classes'],
+#         ckpt['model_num_domains'],
+#         ckpt['model_hparams'],
+#     )
+#     model.load_state_dict(ckpt['model_dict'])
+#     return model
 
 def check_constant_predictions(model: algorithms.Algorithm,
                                data_loader: torch.utils.data.DataLoader,

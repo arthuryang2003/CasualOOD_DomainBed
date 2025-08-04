@@ -129,15 +129,25 @@ python -m domainbed.scripts.sweep launch \
     --data_dir=./domainbed/data \
     --output_dir=./output/test \
     --command_launcher smart_gpu \
-    --algorithms CasualOODAlgorithm \
-    --datasets CelebA_Blond \
-    --n_hparams 1 \
-    --n_trials 1 \
+    --algorithms VITA_Zu_only \
+    --datasets ColoredMNIST_IRM \
+    --n_hparams 20 \
+    --n_trials 3 \
     --fixed_test_envs 2 \
     --skip_confirmation \
 
     
 ```
+python -m domainbed.scripts.sweep launch \
+    --data_dir=./domainbed/data \
+    --output_dir=./output/test \
+    --command_launcher smart_gpu \
+    --algorithms VITA_Zu_only \
+    --datasets ColoredMNIST_IRM \
+    --n_hparams 1 \
+    --n_trials 1 \
+    --single_test_envs \
+    --skip_confirmation \
 
 python -m domainbed.scripts.visualize_cam \
     --data_dir=./domainbed/data \

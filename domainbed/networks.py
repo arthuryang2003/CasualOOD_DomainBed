@@ -163,6 +163,29 @@ class ResNet(torch.nn.Module):
                 m.eval()
 
 
+class MNIST_MLP(nn.Module):
+    def __init__(self, input_shape, hdim=390):
+        super(MNIST_MLP, self).__init__()
+        input_dim = input_shape[0] * input_shape[1] * input_shape[2]
+        self.modules_ = nn.Sequential(
+            nn.Linear(input_dim, hdim),
+            nn.ReLU(True),
+            nn.Linear(hdim, hdim),
+            nn.ReLU(True)
+        )
+        self.n_outputs = hdim
+
+        for m in self.modules_:
+            if isinstance(m, nn.Linear):
+                gain = nn.init.calculate_gain('relu')
+                nn.init.xavier_uniform_(m.weight, gain=gain)
+                nn.init.zeros_(m.bias)
+
+    def forward(self, x):
+        x = x.view(x.size(0), -1)
+        return self.modules_(x)
+
+
 class MNIST_CNN(nn.Module):
     """
     Hand-tuned architecture for MNIST.
@@ -233,6 +256,8 @@ def Featurizer(input_shape, hparams):
     """Auto-select an appropriate featurizer for the given input shape."""
     if len(input_shape) == 1:
         return MLP(input_shape[0], hparams["mlp_width"], hparams)
+    elif input_shape[1:3] == (14, 14):  # ColoredMNIST_IRM
+        return MNIST_MLP(input_shape)
     elif input_shape[1:3] == (28, 28):
         return MNIST_CNN(input_shape)
     elif input_shape[1:3] == (32, 32):

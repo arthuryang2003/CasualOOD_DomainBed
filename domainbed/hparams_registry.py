@@ -59,6 +59,13 @@ def _hparams(algorithm, dataset, random_seed):
     elif algorithm == 'Fish':
         _hparam('meta_lr', 0.5, lambda r:r.choice([0.05, 0.1, 0.5]))
 
+    elif algorithm == 'VITA_Zu_only':
+        _hparam('z_dim', 64, lambda r: int(r.choice([32, 128])))
+        _hparam('mi_lambda', 1., lambda r: 10**r.uniform(-1, 1))
+        _hparam('domain_lambda',  1., lambda r: 10**r.uniform(-1, 1))
+        _hparam('irm_lambda', 1e2, lambda r: 10**r.uniform(-1, 5))
+        _hparam('irm_penalty_anneal_iters', 500, lambda r: int(10**r.uniform(0, 4)))
+
     elif algorithm == "RDM": 
         if dataset in ['DomainNet']: 
             _hparam('rdm_lambda', 0.5, lambda r: r.uniform(0.1, 1.0))

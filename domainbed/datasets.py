@@ -45,6 +45,7 @@ DATASETS = [
     # "SpawriousM2M_hard",
     'CelebA_Blond',
     "NICOMixed",
+    'ColoredMNIST_IRM',
 ]
 
 def get_dataset_class(dataset_name):
@@ -167,6 +168,66 @@ class Debug28(Debug):
 class Debug224(Debug):
     INPUT_SHAPE = (3, 224, 224)
     ENVIRONMENTS = ['0', '1', '2']
+
+
+
+
+class ColoredMNIST_IRM(MultipleDomainDataset):
+    CHECKPOINT_FREQ = 500
+    ENVIRONMENTS = ['+90%', '+80%', '-90%']
+    def __init__(self, root, test_envs, hparams):
+        if 'data_augmentation_scheme' in hparams:
+            raise NotImplementedError
+        super().__init__()
+        original_dataset_tr = MNIST(root, train=True, download=True)
+
+        original_images = original_dataset_tr.data
+        original_labels = original_dataset_tr.targets
+
+        shuffle = torch.randperm(len(original_images))
+        original_images = original_images[shuffle]
+        original_labels = original_labels[shuffle]
+
+        self.datasets = []
+        for i, env in enumerate([0.1, 0.2]):
+            images = original_images[:50000][i::2]
+            labels = original_labels[:50000][i::2]
+            self.datasets.append(self.color_dataset(images, labels, env))
+        images = original_images[50000:]
+        labels = original_labels[50000:]
+        self.datasets.append(self.color_dataset(images, labels, 0.9))
+
+        self.input_shape = (2, 14, 14)
+        self.num_classes = 2
+
+    def color_dataset(self, images, labels, environment):
+        # Subsample 2x for computational convenience
+        images = images.reshape((-1, 28, 28))[:, ::2, ::2]
+        # Assign a binary label based on the digit
+        labels = (labels < 5).float()
+        # Flip label with probability 0.25
+        labels = self.torch_xor_(labels,
+                                 self.torch_bernoulli_(0.25, len(labels)))
+
+        # Assign a color based on the label; flip the color with probability e
+        colors = self.torch_xor_(labels,
+                                 self.torch_bernoulli_(environment,
+                                                       len(labels)))
+        images = torch.stack([images, images], dim=1)
+        # Apply the color to the image by zeroing out the other color channel
+        images[torch.tensor(range(len(images))), (
+            1 - colors).long(), :, :] *= 0
+
+        x = images.float().div_(255.0)
+        y = labels.view(-1).long()
+
+        return TensorDataset(x, y)
+
+    def torch_bernoulli_(self, p, size):
+        return (torch.rand(size) < p).float()
+
+    def torch_xor_(self, a, b):
+        return (a - b).abs()
 
 
 class NICOMixedEnvironment(torch.utils.data.Dataset):
