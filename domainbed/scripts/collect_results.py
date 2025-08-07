@@ -2,7 +2,6 @@
 
 import collections
 
-
 import argparse
 import functools
 import glob
@@ -73,8 +72,9 @@ def format_mean(data, latex):
     else:
         return mean, err, "{:.1f} +/- {:.1f}".format(mean, err)
 
+
 def print_table(table, header_text, row_labels, col_labels, colwidth=10,
-    latex=True):
+                latex=True):
     """Pretty-print a 2D array of data, optionally with row/col labels"""
     print("")
 
@@ -92,7 +92,7 @@ def print_table(table, header_text, row_labels, col_labels, colwidth=10,
 
     if latex:
         col_labels = ["\\textbf{" + str(col_label).replace("%", "\\%") + "}"
-            for col_label in col_labels]
+                      for col_label in col_labels]
     table.insert(0, col_labels)
 
     for r, row in enumerate(table):
@@ -104,23 +104,25 @@ def print_table(table, header_text, row_labels, col_labels, colwidth=10,
         print("\\end{tabular}}")
         print("\\end{center}")
 
-def print_results_tables(records, selection_method, latex):
+
+def print_results_tables(records, selection_method, dataset, algorithm, latex):
     """Given all records, print a results table for each dataset."""
     grouped_records = reporting.get_grouped_records(records)
-
+    if dataset is not None:
+        grouped_records = grouped_records.filter(lambda g: g['dataset'] == dataset)
+    if algorithm is not None:
+        grouped_records = grouped_records.filter(lambda g: g['algorithm'] == algorithm)
     if selection_method == model_selection.IIDAutoLRAccuracySelectionMethod:
         for r in grouped_records:
             r['records'] = merge_records(r['records'])
-
     grouped_records = grouped_records.map(lambda group:
-        { **group, "sweep_acc": selection_method.sweep_acc(group["records"]) }
-    ).filter(lambda g: g["sweep_acc"] is not None)
-
+                                          {**group, "sweep_acc": selection_method.sweep_acc(group["records"])}
+                                          ).filter(lambda g: g["sweep_acc"] is not None)
 
     # read algorithm names and sort (predefined order)
     alg_names = Q(records).select("args.algorithm").unique()
     alg_names = ([n for n in algorithms.ALGORITHMS if n in alg_names] +
-        [n for n in alg_names if n not in algorithms.ALGORITHMS])
+                 [n for n in alg_names if n not in algorithms.ALGORITHMS])
 
     # read dataset names and sort (lexicographic order)
     dataset_names = Q(records).select("args.dataset").unique().sorted()
@@ -137,10 +139,10 @@ def print_results_tables(records, selection_method, latex):
             means = []
             for j, test_env in enumerate(test_envs):
                 trial_accs = (grouped_records
-                    .filter_equals(
-                        "dataset, algorithm, test_env",
-                        (dataset, algorithm, test_env)
-                    ).select("sweep_acc"))
+                              .filter_equals(
+                    "dataset, algorithm, test_env",
+                    (dataset, algorithm, test_env)
+                ).select("sweep_acc"))
                 mean, err, table[i][j] = format_mean(trial_accs, latex)
                 means.append(mean)
             if None in means:
@@ -154,9 +156,9 @@ def print_results_tables(records, selection_method, latex):
             "Avg"
         ]
         header_text = (f"Dataset: {dataset}, "
-            f"model selection method: {selection_method.name}")
+                       f"model selection method: {selection_method.name}")
         print_table(table, header_text, alg_names, list(col_labels),
-            colwidth=20, latex=latex)
+                    colwidth=20, latex=latex)
 
     # Print an "averages" table
     if latex:
@@ -168,12 +170,12 @@ def print_results_tables(records, selection_method, latex):
         means = []
         for j, dataset in enumerate(dataset_names):
             trial_averages = (grouped_records
-                .filter_equals("algorithm, dataset", (algorithm, dataset))
-                .group("trial_seed")
-                .map(lambda trial_seed, group:
-                    group.select("sweep_acc").mean()
-                )
-            )
+                              .filter_equals("algorithm, dataset", (algorithm, dataset))
+                              .group("trial_seed")
+                              .map(lambda trial_seed, group:
+                                   group.select("sweep_acc").mean()
+                                   )
+                              )
             mean, err, table[i][j] = format_mean(trial_averages, latex)
             means.append(mean)
         if None in means:
@@ -184,7 +186,8 @@ def print_results_tables(records, selection_method, latex):
     col_labels = ["Algorithm", *dataset_names, "Avg"]
     header_text = f"Averages, model selection method: {selection_method.name}"
     print_table(table, header_text, alg_names, col_labels, colwidth=25,
-        latex=latex)
+                latex=latex)
+
 
 if __name__ == "__main__":
     np.set_printoptions(suppress=True)
@@ -192,6 +195,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Domain generalization testbed")
     parser.add_argument("--input_dir", type=str, required=True)
+    parser.add_argument("--algorithm", type=str, default=None)
+    parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--latex", action="store_true")
     parser.add_argument("--auto_lr", action="store_true")
     args = parser.parse_args()
@@ -212,13 +217,31 @@ if __name__ == "__main__":
     else:
         print("Total records:", len(records))
 
+    if records and args.dataset is not None:
+        grouped_records = reporting.get_grouped_records(records)
+        grouped_records = grouped_records.filter(lambda g: g['dataset'] == args.dataset)
+        try:
+            val_envs = grouped_records[0]['records'][0]['args'].get('val_envs', False)
+        except:
+            val_envs = None
+    else:
+        try:
+            val_envs = records[0]['args'].get('val_envs', False)
+        except:
+            val_envs = None
     if args.auto_lr:
         SELECTION_METHODS = [model_selection.IIDAutoLRAccuracySelectionMethod]
+    elif val_envs:
+        SELECTION_METHODS = [
+            model_selection.OODValidationSelectionMethod
+        ]
     else:
         SELECTION_METHODS = [
-            model_selection.IIDAccuracySelectionMethod,
-            model_selection.LeaveOneOutSelectionMethod,
+            # model_selection.IIDAccuracySelectionMethod,
+            # model_selection.LeaveOneOutSelectionMethod,
             model_selection.OracleSelectionMethod,
+            # model_selection.IIDTrainingAccuracyMethod,
+            # model_selection.IIDValidationAccuracyMethod
         ]
 
     for selection_method in SELECTION_METHODS:
@@ -226,7 +249,7 @@ if __name__ == "__main__":
             print()
             print("\\subsection{{Model selection: {}}}".format(
                 selection_method.name))
-        print_results_tables(records, selection_method, args.latex)
+        print_results_tables(records, selection_method, args.dataset, args.algorithm, args.latex)
 
     if args.latex:
         print("\\end{document}")
