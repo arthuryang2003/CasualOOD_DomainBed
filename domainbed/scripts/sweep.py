@@ -96,7 +96,7 @@ def all_test_env_combinations(n):
             yield [i, j]
 
 def make_args_list(n_trials, dataset_names, algorithms, n_hparams_from, n_hparams, steps,
-    data_dir, task, holdout_fraction, single_test_envs,fixed_test_envs, hparams):
+    data_dir, task, holdout_fraction, fixed_test_envs, fixed_val_envs, single_test_envs, hparams):
     args_list = []
     for trial_seed in range(n_trials):
         for dataset in dataset_names:
@@ -115,6 +115,8 @@ def make_args_list(n_trials, dataset_names, algorithms, n_hparams_from, n_hparam
                         train_args['dataset'] = dataset
                         train_args['algorithm'] = algorithm
                         train_args['test_envs'] = test_envs
+                        if fixed_val_envs:
+                            train_args['val_envs'] = fixed_val_envs
                         train_args['holdout_fraction'] = holdout_fraction
                         train_args['hparams_seed'] = hparams_seed
                         train_args['data_dir'] = data_dir
@@ -139,7 +141,7 @@ DATASETS = [d for d in datasets.DATASETS if "Debug" not in d]
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run a sweep')
-    parser.add_argument('command', choices=['launch', 'delete_incomplete'])
+    parser.add_argument('command', choices=['launch', 'delete_incomplete', 'list'])
     parser.add_argument('--datasets', nargs='+', type=str, default=DATASETS)
     parser.add_argument('--algorithms', nargs='+', type=str, default=algorithms.ALGORITHMS)
     parser.add_argument('--task', type=str, default="domain_generalization")
@@ -153,11 +155,10 @@ if __name__ == "__main__":
     parser.add_argument('--steps', type=int, default=None)
     parser.add_argument('--hparams', type=str, default=None)
     parser.add_argument('--holdout_fraction', type=float, default=0.2)
+    parser.add_argument('--fixed_test_envs', type=int, nargs='*', default=[])
+    parser.add_argument('--fixed_val_envs', type=int, nargs='*', default=[])   # setting this triggers a new model selection method
     parser.add_argument('--single_test_envs', action='store_true')
     parser.add_argument('--skip_confirmation', action='store_true')
-    parser.add_argument('--fixed_test_envs', type=int, nargs='+', default=[],
-        help='Use a fixed set of environments for testing. Setting the argument '
-             'disables leave-one-domain-out training.')
     args = parser.parse_args()
 
     args_list = make_args_list(
@@ -170,8 +171,9 @@ if __name__ == "__main__":
         data_dir=args.data_dir,
         task=args.task,
         holdout_fraction=args.holdout_fraction,
-        single_test_envs=args.single_test_envs,
         fixed_test_envs=args.fixed_test_envs,
+        fixed_val_envs=args.fixed_val_envs,
+        single_test_envs=args.single_test_envs,
         hparams=args.hparams
     )
 
