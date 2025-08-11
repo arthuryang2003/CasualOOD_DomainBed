@@ -198,7 +198,7 @@ def _hparams(algorithm, dataset, random_seed):
 
     elif algorithm == 'CasualOOD_Zu_only':
         _hparam('z_dim', 64, lambda r: int(r.choice([32, 128])))
-        _hparam('mi_lambda', 1., lambda r: float(r.choice([0.1, 2])))
+        _hparam('mi_lambda', 1., lambda r: r.uniform(0.1, 2.0))
         # _hparam('mmd_lambda',  1., lambda r: 10**r.uniform(-1, 1))
         _hparam('domain_lambda',  1., lambda r: 10**r.uniform(-1, 1))
         # _hparam('mmd_kernel', 'gaussian', lambda r: r.choice(['gaussian', 'mean_cov']))

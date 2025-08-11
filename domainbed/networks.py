@@ -108,53 +108,82 @@ class DinoV2(torch.nn.Module):
 
 class ResNet(torch.nn.Module):
     """ResNet with the softmax chopped off and the batchnorm frozen"""
-    def __init__(self, input_shape, hparams):
+
+    def __init__(self, input_shape, hparams, smaller_conv1=False):
         super(ResNet, self).__init__()
         if hparams['resnet18']:
-            self.network = torchvision.models.resnet18(pretrained=True)
+            if hparams.get('no_pretrain', False):
+                self.network = torchvision.models.resnet18(pretrained=False)
+            elif hparams.get('pretrained_weight_path', False):
+                self.network = torchvision.models.resnet18(pretrained=False)
+                pretrained_dict = torch.load(hparams['pretrained_weight_path'])
+                if hparams.get('pretrained_conv1_only'):
+                    model_dict = self.network.state_dict()
+                    pretrained_dict = {k: v for k, v in pretrained_dict.items()
+                                       if k.startswith('conv1') or k.startswith('bn1')}
+                    print(f'[DEBUG] Restored: {pretrained_dict.keys()}')
+                    model_dict.update(pretrained_dict)
+                    self.network.load_state_dict(model_dict)
+                else:
+                    self.network.load_state_dict(pretrained_dict)
+            else:
+                self.network = torchvision.models.resnet18(pretrained=True)
             self.n_outputs = 512
         else:
-            self.network = torchvision.models.resnet50(pretrained=True)
+            if hparams.get('no_pretrain', False):
+                self.network = torchvision.models.resnet50(pretrained=False)
+            elif hparams.get('pretrained_weight_path', False):
+                self.network = torchvision.models.resnet50(pretrained=False)
+                self.network.load_state_dict(torch.load(hparams['pretrained_weight_path']))
+            else:
+                self.network = torchvision.models.resnet50(pretrained=True)
             self.n_outputs = 2048
 
-        if hparams['resnet50_augmix']:
-            self.network = timm.create_model('resnet50.ram_in1k', pretrained=True)
-            self.n_outputs = 2048
+        if smaller_conv1:
+            assert hparams.get('no_pretrain', False)
+            self.network.conv1 = nn.Conv2d(
+                3, 64, kernel_size=(3, 3),
+                stride=(1, 1), padding=(1, 1), bias=False)
 
         # self.network = remove_batch_norm_from_resnet(self.network)
+        self.unfreeze_bn = hparams.get('unfreeze_resnet_bn', False)
 
         # adapt number of channels
         nc = input_shape[0]
         if nc != 3:
             tmp = self.network.conv1.weight.data.clone()
 
-            self.network.conv1 = nn.Conv2d(
-                nc, 64, kernel_size=(7, 7),
-                stride=(2, 2), padding=(3, 3), bias=False)
+            if smaller_conv1:
+                self.network.conv1 = nn.Conv2d(
+                    nc, 64, kernel_size=(3, 3),
+                    stride=(1, 1), padding=(1, 1), bias=False)
+            else:
+                self.network.conv1 = nn.Conv2d(
+                    nc, 64, kernel_size=(7, 7),
+                    stride=(2, 2), padding=(3, 3), bias=False)
 
-            for i in range(nc):
-                self.network.conv1.weight.data[:, i, :, :] = tmp[:, i % 3, :, :]
+                for i in range(nc):
+                    self.network.conv1.weight.data[:, i, :, :] = tmp[:, i % 3, :, :]
 
         # save memory
         del self.network.fc
         self.network.fc = Identity()
 
-        if hparams["freeze_bn"]:
+        if not self.unfreeze_bn:
             self.freeze_bn()
         self.hparams = hparams
         self.dropout = nn.Dropout(hparams['resnet_dropout'])
-        self.activation = nn.Identity() # for URM; does not affect other algorithms
 
     def forward(self, x):
         """Encode x into a feature vector of size n_outputs."""
-        return self.activation(self.dropout(self.network(x)))
+        return self.dropout(self.network(x))
 
     def train(self, mode=True):
         """
         Override the default train() to freeze the BN parameters
         """
         super().train(mode)
-        if self.hparams["freeze_bn"]:
+        if not self.unfreeze_bn:
             self.freeze_bn()
 
     def freeze_bn(self):
