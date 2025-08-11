@@ -99,8 +99,8 @@ python3 -m domainbed.scripts.train\
 ```
 python3 -m domainbed.scripts.train\
        --data_dir=./domainbed/data/ \
-       --algorithm ERM\
-       --dataset NICOMixed \
+       --algorithm CasualOODAlgorithm\
+       --dataset CelebA_Blond \
        --uda_holdout_fraction=0.2 \
        --test_env 2
 
@@ -140,20 +140,32 @@ python -m domainbed.scripts.sweep launch \
 ```
 python -m domainbed.scripts.sweep launch \
     --data_dir=./domainbed/data \
-    --output_dir=./output/test \
+    --output_dir=./CMNIST/Main_wo_MMD \
+    --command_launcher local \
+    --algorithms CasualOOD_Zu_only \
+    --datasets NICOMixed \
+    --n_hparams 20 \
+    --n_trials 3 \
+    --fixed_val_envs 2 \
+    --fixed_test_envs 3 \
+    --skip_confirmation \
+
+python -m domainbed.scripts.sweep launch \
+    --data_dir=./domainbed/data \
+    --output_dir=./ColoredMNIST_CNN/Zu \
     --command_launcher smart_gpu \
-    --algorithms VITA_Zu_only \
-    --datasets ColoredMNIST_IRM \
-    --n_hparams 1 \
-    --n_trials 1 \
-    --single_test_envs \
+    --algorithms CasualOOD_Zu_only \
+    --datasets ColoredMNIST \
+    --n_hparams 20 \
+    --n_trials 3 \
+    --fixed_test_envs 2 \
     --skip_confirmation \
 
 python -m domainbed.scripts.visualize_cam \
     --data_dir=./domainbed/data \
-    --input_dir=./output/Main_wo_MMD \
-    --dataset=ColoredMNIST \
-    --algorithm=CasualOODAlgorithm \
+    --input_dir=./output/original \
+    --dataset=CelebA_Blond \
+    --algorithm=IRM \
     --test_env=2
        
 
@@ -165,16 +177,23 @@ To view the results of your sweep:
 
 ````sh
 python -m domainbed.scripts.collect_results\
-       --input_dir=./output/Zu_mi_mmd \
+        --input_dir=./ColoredMNIST_CNN/Main_wo_MMD 
 ````
 
 List top haparams  of your sweep:
 
+python -m domainbed.scripts.list_top_hparams   --input_dir=./ColoredMNIST_CNN/Zu  --dataset=ColoredMNIST --algorithm=CasualOOD_Zu_only --test_env=2
+
+
 ````sh
-python -m domainbed.scripts.list_top_hparams        --input_dir=./output/Main_wo_MMD --dataset=ColoredMNIST --algorithm=CasualOODAlgorithm --test_env=2
+python -m domainbed.scripts.list_top_hparams        
        --input_dir=./output/Zu_mi_mmd \
 ````
-
+python -m domainbed.scripts.list_top_hparams \     
+    --input_dir=./output/Main_wo_MMD \
+    --dataset=ColoredMNIST \
+    --algorithm=CasualOODAlgorithm \
+    --test_env=2 \
 ## Running unit tests
 
 DomainBed includes some unit tests and end-to-end tests. While not exhaustive, but they are a good sanity-check. To run the tests:

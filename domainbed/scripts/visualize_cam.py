@@ -162,89 +162,78 @@ def main(args):
     os.makedirs(out_dir, exist_ok=True)
 
 
-    selected = {0: [], 1: []}
-    max_per_class = 5
+    selected = []
+    max_images = 20
 
     for x, y in test_loader:
-        if all(len(v) >= max_per_class for v in selected.values()):
-            break
         x, y = x.to(device), y.to(device)
-        with torch.no_grad():
-            logits = model.predict(x)
-            pred = logits.argmax(1)
-        for img, lbl, prd in zip(x, y, pred):
-            lbl_i = lbl.item()
-            prd_i = prd.item()
-            if lbl_i in selected and prd_i == lbl_i and len(selected[lbl_i]) < max_per_class:
-                selected[lbl_i].append(img.unsqueeze(0))
+        for img, lbl in zip(x, y):
+            selected.append((img.unsqueeze(0), lbl.item()))
+            if len(selected) >= max_images:
+                break
+        if len(selected) >= max_images:
+            break
 
     target_layer = find_last_conv(model.featurizer)
     cam_extractor = GradCAM(model, target_layer=target_layer)
 
-    for label_class in [0,1]:
+    for idx, (img, label_class) in enumerate(selected):
+        img = img.to(device)
+        img.requires_grad_()
 
         if args.algorithm == "CasualOODAlgorithm":
-            for idx, img in enumerate(selected[label_class]):
-                img = img.to(device)
-                img.requires_grad_()
-                with torch.enable_grad():
-                    z_u, z_s, u_logits, s_logits, tilde_s_logits, combined_logits = model.encode(img)
-                    class_idx_u = u_logits.argmax(dim=1).item()
-                    class_idx_s = s_logits.argmax(dim=1).item()
-                    class_idx_t = tilde_s_logits.argmax(dim=1).item()
+            with torch.enable_grad():
+                z_u, z_s, u_logits, s_logits, tilde_s_logits, combined_logits = model.encode(img)
+                class_idx_u = u_logits.argmax(dim=1).item()
+                class_idx_s = s_logits.argmax(dim=1).item()
+                class_idx_t = tilde_s_logits.argmax(dim=1).item()
 
-                    cam_map_u = cam_extractor(class_idx_u, scores=u_logits, retain_graph=True)
-                    cam_map_s = cam_extractor(class_idx_s, scores=s_logits, retain_graph=True)
-                    cam_map_tilde_s = cam_extractor(class_idx_t, scores=tilde_s_logits, retain_graph=True)
+                cam_map_u = cam_extractor(class_idx_u, scores=u_logits, retain_graph=True)
+                cam_map_s = cam_extractor(class_idx_s, scores=s_logits, retain_graph=True)
+                cam_map_tilde_s = cam_extractor(class_idx_t, scores=tilde_s_logits, retain_graph=True)
 
+            img_vis = auto_color_map(img[0].detach().cpu() * 0.229 + 0.485)
+            img_vis = torch.clamp(img_vis, 0, 1)
+            heatmap_u = overlay_mask(to_pil_image(img_vis), cam_to_pil(cam_map_u[0]), alpha=0.5)
+            heatmap_s = overlay_mask(to_pil_image(img_vis), cam_to_pil(cam_map_s[0]), alpha=0.5)
+            heatmap_tilde_s = overlay_mask(to_pil_image(img_vis), cam_to_pil(cam_map_tilde_s[0]), alpha=0.5)
 
-                img_vis = auto_color_map(img[0].detach().cpu() * 0.229 + 0.485)
-                img_vis = torch.clamp(img_vis, 0, 1)
-                # 热力图叠加
-                heatmap_u = overlay_mask(to_pil_image(img_vis), cam_to_pil(cam_map_u[0]), alpha=0.5)
-                heatmap_s = overlay_mask(to_pil_image(img_vis), cam_to_pil(cam_map_s[0]), alpha=0.5)
-                heatmap_tilde_s = overlay_mask(to_pil_image(img_vis), cam_to_pil(cam_map_tilde_s[0]), alpha=0.5)
-                # 可视化保存
-                fig, axs = plt.subplots(1, 4, figsize=(16, 4))
-                axs[0].imshow(to_pil_image(img_vis))
-                axs[0].set_title(f"Original({label_class})")
-                axs[1].imshow(heatmap_u)
-                axs[1].set_title(f"GradCAM: z_u({class_idx_u})")
-                axs[2].imshow(heatmap_s)
-                axs[2].set_title(f"GradCAM: z_s({class_idx_s})")
-                axs[3].imshow(heatmap_tilde_s)
-                axs[3].set_title(f"GradCAM: z_s'({class_idx_t})")
+            fig, axs = plt.subplots(1, 4, figsize=(16, 4))
+            axs[0].imshow(to_pil_image(img_vis))
+            axs[0].set_title(f"Original({label_class})")
+            axs[1].imshow(heatmap_u)
+            axs[1].set_title(f"GradCAM: z_u({class_idx_u})")
+            axs[2].imshow(heatmap_s)
+            axs[2].set_title(f"GradCAM: z_s({class_idx_s})")
+            axs[3].imshow(heatmap_tilde_s)
+            axs[3].set_title(f"GradCAM: z_s'({class_idx_t})")
+            for ax in axs:
+                ax.axis('off')
+            plt.tight_layout()
+            save_path = os.path.join(out_dir, f"img{idx}_class{label_class}.png")
+            plt.savefig(save_path)
+            plt.close()
+        else:
+            with torch.enable_grad():
+                logits = model.predict(img)
+                class_idx = logits.argmax(1).item()
+                cam_map = cam_extractor(class_idx, scores=logits)
 
-                for ax in axs:
-                    ax.axis('off')
-                plt.tight_layout()
-                save_path = os.path.join(out_dir, f"selected_class{label_class}_{idx}.png")
-                plt.savefig(save_path)
-                plt.close()
-        else :
-            for idx, img in enumerate(selected[label_class]):
-                img = img.to(device)
-                img.requires_grad_()
-                with torch.enable_grad():
-                    logits = model.predict(img)
-                    class_idx = logits.argmax(1).item()
-                    cam_map = cam_extractor(class_idx, scores=logits)
+            img_vis = auto_color_map(img[0].detach().cpu() * 0.229 + 0.485)
+            img_vis = torch.clamp(img_vis, 0, 1)
+            heatmap = overlay_mask(to_pil_image(img_vis), cam_to_pil(cam_map[0]), alpha=0.5)
 
-                img_vis = auto_color_map(img[0].detach().cpu() * 0.229 + 0.485)
-                img_vis = torch.clamp(img_vis, 0, 1)
-                heatmap = overlay_mask(to_pil_image(img_vis), cam_to_pil(cam_map[0]), alpha=0.5)
-
-                fig, axs = plt.subplots(1, 2, figsize=(6, 3))
-                axs[0].imshow(to_pil_image(img_vis))
-                axs[0].set_title(f"Original({label_class})")
-                axs[1].imshow(heatmap)
-                axs[1].set_title(f"GradCAM({class_idx})")
-                for ax in axs:
-                    ax.axis('off')
-                plt.tight_layout()
-                save_path = os.path.join(out_dir, f"class{label_class}_{idx}.png")
-                plt.savefig(save_path)
-                plt.close()
+            fig, axs = plt.subplots(1, 2, figsize=(6, 3))
+            axs[0].imshow(to_pil_image(img_vis))
+            axs[0].set_title(f"Original({label_class})")
+            axs[1].imshow(heatmap)
+            axs[1].set_title(f"GradCAM({class_idx})")
+            for ax in axs:
+                ax.axis('off')
+            plt.tight_layout()
+            save_path = os.path.join(out_dir, f"img{idx}_class{label_class}.png")
+            plt.savefig(save_path)
+            plt.close()
 
     if hasattr(model, 'mask'):
         mask_sigmoid = torch.sigmoid(model.mask).detach().cpu().numpy().squeeze()
