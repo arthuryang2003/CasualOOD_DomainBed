@@ -611,3 +611,43 @@ class SupConLossLambda(torch.nn.Module):
                 continue
             loss -= loss_i # sum and average over num positives
         return loss/(batch_size-nans+1) # avg over batch
+
+def check_single_class_prediction(network, loader, device):
+    """Check whether ``network`` predicts the same class for every sample.
+
+    This function iterates over ``loader`` and collects the predicted class for
+    each example. If all predictions correspond to the exact same class label,
+    a ``RuntimeError`` is raised to signal a degenerate model behaviour.
+
+    Args:
+        network: The model to evaluate. Must implement ``predict``.
+        loader: Iterable of batches providing inputs (labels are ignored).
+        device: Torch device on which to run the computation.
+
+    Raises:
+        RuntimeError: If all predictions produced by ``network`` are identical.
+    """
+
+    network.eval()
+    first_pred = None
+    all_same = True
+
+    with torch.no_grad():
+        for x, _ in loader:
+            x = x.to(device)
+            p = network.predict(x)
+            if p.size(1) == 1:
+                preds = p.gt(0).long().view(-1)
+            else:
+                preds = p.argmax(1)
+            preds = preds.cpu()
+            if first_pred is None:
+                first_pred = preds[0].item()
+            if (preds != first_pred).any():
+                all_same = False
+                break
+
+    network.train()
+
+    if all_same:
+        raise RuntimeError("Model predicted a single class for all inputs")
