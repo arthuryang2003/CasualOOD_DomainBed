@@ -81,7 +81,12 @@ if __name__ == "__main__":
         hparams = hparams_registry.random_hparams(args.algorithm, args.dataset,
             misc.seed_hash(args.hparams_seed, args.trial_seed))
     if args.hparams:
-        hparams.update(json.loads(args.hparams))
+        hp = args.hparams
+        if os.path.isfile(hp):
+            with open(hp, 'r') as f:
+                hparams.update(json.load(f))
+        else:
+            hparams.update(json.loads(hp))
 
     print('HParams:')
     for k, v in sorted(hparams.items()):
@@ -188,8 +193,7 @@ if __name__ == "__main__":
         weights=env_weights,
         batch_size=hparams['batch_size'],
         num_workers=dataset.N_WORKERS)
-        for i, (env, env_weights) in enumerate(uda_splits)
-        if i in args.test_envs]
+        for i, (env, env_weights) in enumerate(uda_splits)]
 
     if args.val_envs:
         eval_loaders = [FastDataLoader(
@@ -286,19 +290,19 @@ if __name__ == "__main__":
 
             evals = zip(eval_loader_names, eval_loaders, eval_weights)
 
-            # for name, loader, weights in evals:
-            #     acc = misc.accuracy(algorithm, loader, weights, device)
-            #     results[name + '_acc'] = acc
+            for name, loader, weights in evals:
+                acc = misc.accuracy(algorithm, loader, weights, device)
+                results[name + '_acc'] = acc
 
 
-            if step > (hparams.get('phase1_steps', 0) + hparams.get('phase2_steps', 0)) and args.algorithm == "CasualOODAlgorithm":
-                for name, loader, weights in evals:
-                    acc = algorithm.combined_inference(algorithm, [loader], dataset.num_classes, device)
-                    results[name + '_acc'] = acc / 100.0
-            else :
-                for name, loader, weights in evals:
-                    acc = misc.accuracy(algorithm, loader, weights, device)
-                    results[name + '_acc'] = acc
+            # if step > (hparams.get('phase1_steps', 0) + hparams.get('phase2_steps', 0)) and args.algorithm == "CasualOODAlgorithm":
+            #     for name, loader, weights in evals:
+            #         acc = algorithm.combined_inference(algorithm, [loader], dataset.num_classes, device)
+            #         results[name + '_acc'] = acc / 100.0
+            # else :
+            #     for name, loader, weights in evals:
+            #         acc = misc.accuracy(algorithm, loader, weights, device)
+            #         results[name + '_acc'] = acc
 
             results['mem_gb'] = torch.cuda.max_memory_allocated() / (1024.*1024.*1024.)
 
