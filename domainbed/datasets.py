@@ -517,6 +517,45 @@ class MultipleEnvironmentMNIST(MultipleDomainDataset):
         self.input_shape = input_shape
         self.num_classes = num_classes
 
+class ColoredMNISTWithColor(MultipleEnvironmentMNIST):
+    """返回 (image, class_label, color_label) 的 ColoredMNIST 变体。"""
+    ENVIRONMENTS = ['+90%', '+80%', '-90%']  # 仅用于标识
+
+    def __init__(self, root, test_envs, hparams):
+        # environment 参数使用“颜色翻转概率 e”，与原实现一致：0.1, 0.2, 0.9
+        super().__init__(root, [0.1, 0.2, 0.9],
+                         self.color_dataset, (2, 28, 28,), 2)
+        self.input_shape = (2, 28, 28)
+        self.num_classes = 2
+
+    def color_dataset(self, images, labels, environment):
+        # labels: 0..9 -> 二分类（<5 为 1，否则 0）
+        labels = (labels < 5).float()
+
+        # 以 0.25 概率翻转类别标签
+        labels = self.torch_xor_(labels, self.torch_bernoulli_(0.25, len(labels)))
+
+        # 基于标签分配颜色，并以概率 e(=environment) 翻转颜色
+        colors = self.torch_xor_(labels, self.torch_bernoulli_(environment, len(labels)))
+
+        # 构造双色通道图像：按颜色将另一通道置零
+        images = torch.stack([images, images], dim=1)         # [N, 2, 28, 28]
+        images[torch.arange(len(images)), (1 - colors).long(), :, :] *= 0
+
+        x = images.float().div_(255.0)        # [N, 2, 28, 28]
+        y = labels.view(-1).long()            # [N]
+        c = colors.view(-1).long()            # [N] 颜色标签（0/1）
+
+        # 关键：返回三个张量 (x, y, c)
+        return TensorDataset(x, y, c)
+
+    @staticmethod
+    def torch_bernoulli_(p, size):
+        return (torch.rand(size) < p).float()
+
+    @staticmethod
+    def torch_xor_(a, b):
+        return (a - b).abs()
 
 class ColoredMNIST(MultipleEnvironmentMNIST):
     ENVIRONMENTS = ['+90%', '+80%', '-90%']
