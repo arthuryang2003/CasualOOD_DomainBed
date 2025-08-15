@@ -107,3 +107,25 @@ class FastDataLoader:
 
     def __len__(self):
         return self._length
+
+class VisualizeDataLoader:
+    def __init__(self, dataset, batch_size, num_workers):
+        batch_sampler = torch.utils.data.BatchSampler(
+            torch.utils.data.SequentialSampler(dataset),
+            batch_size=batch_size,
+            drop_last=False
+        )
+        self._infinite_iterator = iter(torch.utils.data.DataLoader(
+            dataset,
+            num_workers=num_workers,
+            batch_sampler=_InfiniteSampler(batch_sampler)
+        ))
+
+        self._length = len(batch_sampler)
+
+    def __iter__(self):
+        for _ in range(len(self)):
+            yield next(self._infinite_iterator)
+
+    def __len__(self):
+        return self._length
