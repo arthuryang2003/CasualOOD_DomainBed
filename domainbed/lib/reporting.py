@@ -14,6 +14,9 @@ def load_records(path):
     for i, subdir in tqdm.tqdm(list(enumerate(os.listdir(path))),
                                ncols=80,
                                leave=False):
+        done_path = os.path.join(path, subdir, "done")
+        if not os.path.isfile(done_path):
+            continue
         results_path = os.path.join(path, subdir, "results.jsonl")
         try:
             with open(results_path, "r") as f:
