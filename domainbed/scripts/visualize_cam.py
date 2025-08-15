@@ -9,7 +9,7 @@ from torchcam.utils import overlay_mask
 import matplotlib.pyplot as plt
 
 from domainbed import datasets, algorithms
-from domainbed.lib.fast_data_loader import FastDataLoader
+from domainbed.lib.fast_data_loader import FastDataLoader, VisualizeDataLoader
 from domainbed.lib import reporting
 from domainbed import model_selection
 
@@ -152,7 +152,7 @@ def main(args):
 
     dataset = datasets.get_dataset_class(args.dataset)(
         args.data_dir, [args.test_env], model.hparams)
-    test_loader = FastDataLoader(dataset[args.test_env], batch_size=1,
+    test_loader = VisualizeDataLoader(dataset[args.test_env], batch_size=1,
                                  num_workers=dataset.N_WORKERS)
     constant_class = check_constant_predictions(model, test_loader, device)
     if constant_class is not None:
@@ -181,7 +181,7 @@ def main(args):
         img = img.to(device)
         img.requires_grad_()
 
-        if args.algorithm == "CasualOODAlgorithm":
+        if args.algorithm == "CasualOODAlgorithm" or args.algorithm == "VITA" :
             with torch.enable_grad():
                 z_u, z_s, u_logits, s_logits, tilde_s_logits, combined_logits = model.encode(img)
                 class_idx_u = u_logits.argmax(dim=1).item()
