@@ -31,6 +31,7 @@ class Job:
     NOT_LAUNCHED = 'Not launched'
     INCOMPLETE = 'Incomplete'
     DONE = 'Done'
+    ERROR = 'Error'
 
     def __init__(self, train_args, sweep_output_dir):
         args_str = json.dumps(train_args, sort_keys=True)
@@ -48,8 +49,13 @@ class Job:
             command.append(f'--{k} {v}')
         self.command_str = ' '.join(command)
 
-        if os.path.exists(os.path.join(self.output_dir, 'done')):
+        done_path = os.path.join(self.output_dir, 'done')
+        err_path = os.path.join(self.output_dir, 'err.txt')
+
+        if os.path.exists(done_path):
             self.state = Job.DONE
+        elif os.path.isfile(err_path) and os.path.getsize(err_path) > 0:
+            self.state = Job.ERROR
         elif os.path.exists(self.output_dir):
             self.state = Job.INCOMPLETE
         else:
@@ -141,7 +147,7 @@ DATASETS = [d for d in datasets.DATASETS if "Debug" not in d]
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run a sweep')
-    parser.add_argument('command', choices=['launch', 'delete_incomplete', 'list'])
+    parser.add_argument('command', choices=['launch', 'delete_incomplete','delete_error', 'list'])
     parser.add_argument('--datasets', nargs='+', type=str, default=DATASETS)
     parser.add_argument('--algorithms', nargs='+', type=str, default=algorithms.ALGORITHMS)
     parser.add_argument('--task', type=str, default="domain_generalization")
@@ -198,6 +204,13 @@ if __name__ == "__main__":
 
     elif args.command == 'delete_incomplete':
         to_delete = [j for j in jobs if j.state == Job.INCOMPLETE]
+        print(f'About to delete {len(to_delete)} jobs.')
+        if not args.skip_confirmation:
+            ask_for_confirmation()
+        Job.delete(to_delete)
+
+    elif args.command == 'delete_error':
+        to_delete = [j for j in jobs if j.state == Job.ERROR]
         print(f'About to delete {len(to_delete)} jobs.')
         if not args.skip_confirmation:
             ask_for_confirmation()
