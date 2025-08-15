@@ -110,7 +110,7 @@ if __name__ == "__main__":
     else:
         raise NotImplementedError
 
-    if args.algorithm == "CasualOODAlgorithm":
+    if args.algorithm == "CasualOODAlgorithm" or args.algorithm == "VITA":
         args.uda_holdout_fraction = 0.2
 
     # Split each env into an 'in-split' and an 'out-split'. We'll train on
@@ -238,7 +238,7 @@ if __name__ == "__main__":
 
     steps_per_epoch = min([len(env) / hparams['batch_size'] for env, _ in in_splits if env is not None])
 
-    if args.steps is None and args.algorithm == "CasualOODAlgorithm":
+    if args.steps is None and (args.algorithm == "CasualOODAlgorithm" or args.algorithm == "VITA"):
         n_steps = (hparams.get('phase1_steps', 0) +
                    hparams.get('phase2_steps', 0) +
                    hparams.get('finetune_steps', 0))
@@ -267,8 +267,7 @@ if __name__ == "__main__":
         step_start_time = time.time()
         minibatches_device = [(x.to(device), y.to(device))
             for x,y in next(train_minibatches_iterator)]
-        if args.task == "domain_adaptation" or args.algorithm == "CasualOODAlgorithm":
-
+        if args.task == "domain_adaptation" or args.algorithm == "CasualOODAlgorithm" or  args.algorithm == "VITA" :
             uda_device = [x.to(device)
                 for x,_ in next(uda_minibatches_iterator)]
         else:
@@ -291,7 +290,7 @@ if __name__ == "__main__":
             evals = zip(eval_loader_names, eval_loaders, eval_weights)
 
             for name, loader, weights in evals:
-                if step != 0 :
+                if step >= 1000 :
                     misc.check_single_class_prediction(algorithm, loader, device)
                 acc = misc.accuracy(algorithm, loader, weights, device)
                 results[name + '_acc'] = acc
