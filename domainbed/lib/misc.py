@@ -216,9 +216,9 @@ def accuracy(network, loader, weights, device):
 
     network.eval()
     with torch.no_grad():
-        for x, y in loader:
-            x = x.to(device)
-            y = y.to(device)
+        for batch in loader:
+            x = batch[0].to(device)
+            y = batch[1].to(device)
             p = network.predict(x)
             if weights is None:
                 batch_weights = torch.ones(len(x))
@@ -633,8 +633,8 @@ def check_single_class_prediction(network, loader, device):
     all_same = True
 
     with torch.no_grad():
-        for x, _ in loader:
-            x = x.to(device)
+        for batch in loader:
+            x = batch[0].to(device)
             p = network.predict(x)
             if p.size(1) == 1:
                 preds = p.gt(0).long().view(-1)

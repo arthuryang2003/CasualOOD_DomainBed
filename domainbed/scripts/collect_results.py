@@ -22,6 +22,27 @@ from domainbed import model_selection
 from domainbed.lib.query import Q
 import warnings
 
+def count_done_err(path):
+    done = 0
+    err = 0
+    total = 0
+    for subdir in os.listdir(path):
+        subpath = os.path.join(path, subdir)
+        if not os.path.isdir(subpath):
+            continue
+        total += 1
+
+        done_file = os.path.join(subpath, "done")
+        err_file = os.path.join(subpath, "err.txt")
+
+        if os.path.isfile(done_file):
+            done += 1
+        elif os.path.isfile(err_file) and os.path.getsize(err_file) > 0:
+            # err.txt 存在且有内容
+            err += 1
+
+    return done, err, total
+
 def remove_key(d,key):
     new_d = d.copy()
     new_d.pop(key)
@@ -207,15 +228,19 @@ if __name__ == "__main__":
 
     records = reporting.load_records(args.input_dir)
 
+    done_count, err_count, total_count = count_done_err(args.input_dir)
+
     if args.latex:
         print("\\documentclass{article}")
         print("\\usepackage{booktabs}")
         print("\\usepackage{adjustbox}")
         print("\\begin{document}")
         print("\\section{Full DomainBed results}")
-        print("% Total records:", len(records))
+        # print("% Total records:", len(records))
+        print(f"% Done: {done_count}, Err: {err_count}, Total: {total_count}")
     else:
-        print("Total records:", len(records))
+        # print("Total records:", len(records))
+        print("Done:", done_count, "Err:", err_count, "Total:", total_count)
 
     if records and args.dataset is not None:
         grouped_records = reporting.get_grouped_records(records)

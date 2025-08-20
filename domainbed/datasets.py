@@ -28,7 +28,7 @@ DATASETS = [
     # "RotatedMNIST",
     # Big images
     # "VLCS",
-    # "PACS",
+    "PACS",
     # "OfficeHome",
     # "TerraIncognita",
     # "DomainNet",
@@ -46,6 +46,7 @@ DATASETS = [
     'CelebA_Blond',
     "NICOMixed",
     'ColoredMNIST_IRM',
+    'ColoredMNISTWithColor',
 ]
 
 def get_dataset_class(dataset_name):

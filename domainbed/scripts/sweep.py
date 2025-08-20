@@ -54,10 +54,14 @@ class Job:
 
         if os.path.exists(done_path):
             self.state = Job.DONE
-        elif os.path.isfile(err_path) and os.path.getsize(err_path) > 0:
-            self.state = Job.ERROR
+
         elif os.path.exists(self.output_dir):
             self.state = Job.INCOMPLETE
+            if os.path.isfile(err_path) and os.path.getsize(err_path) > 0:
+                with open(err_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                if 'error' in content.lower():
+                    self.state = Job.ERROR
         else:
             self.state = Job.NOT_LAUNCHED
 
@@ -187,11 +191,13 @@ if __name__ == "__main__":
 
     for job in jobs:
         print(job)
-    print("{} jobs: {} done, {} incomplete, {} not launched.".format(
+    print("{} jobs: {} done, {} incomplete, {} not launched, {} error.".format(
         len(jobs),
         len([j for j in jobs if j.state == Job.DONE]),
         len([j for j in jobs if j.state == Job.INCOMPLETE]),
-        len([j for j in jobs if j.state == Job.NOT_LAUNCHED]))
+        len([j for j in jobs if j.state == Job.NOT_LAUNCHED]),
+        len([j for j in jobs if j.state == Job.ERROR]))
+
     )
 
     if args.command == 'launch':

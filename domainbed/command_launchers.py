@@ -66,7 +66,7 @@ def smart_gpu_launcher(commands):
         available_gpus = [str(x) for x in range(torch.cuda.device_count())]
 
     n_gpus = len(available_gpus)
-    max_procs_per_gpu = 8
+    max_procs_per_gpu = 2
     procs_by_gpu = [[] for _ in range(n_gpus)]
 
     while len(commands) > 0:

@@ -12,7 +12,7 @@ def _hparams(algorithm, dataset, random_seed):
     Global registry of hyperparams. Each entry is a (default, random) tuple.
     New algorithms / networks / etc. should add entries here.
     """
-    SMALL_IMAGES = ['Debug28', 'RotatedMNIST', 'ColoredMNIST']
+    SMALL_IMAGES = ['Debug28', 'RotatedMNIST', 'ColoredMNIST', 'ColoredMNISTWithColor']
 
     hparams = {}
 
@@ -220,6 +220,14 @@ def _hparams(algorithm, dataset, random_seed):
         # _hparam('irm_lambda', 1e2, lambda r: 10**r.uniform(-1, 5))
         # _hparam('irm_penalty_anneal_iters', 500, lambda r: int(10**r.uniform(0, 4)))
 
+
+    elif algorithm == 'VITA_Zs_color':
+        _hparam('irm_lambda', 1e2, lambda r: 10**r.uniform(-1, 5))
+        _hparam('irm_penalty_anneal_iters', 500,
+                lambda r: int(10**r.uniform(0, 4)))
+        _hparam('mi_lambda', 1., lambda r: 10**r.uniform(-1, 1))
+        _hparam('domain_lambda',  1., lambda r: 10**r.uniform(-1, 1))
+
     elif algorithm == 'VITA':
         _hparam('irm_lambda', 1e2, lambda r: 10**r.uniform(-1, 5))
         _hparam('irm_penalty_anneal_iters', 500,
@@ -233,6 +241,18 @@ def _hparams(algorithm, dataset, random_seed):
         _hparam('domain_lambda',  1., lambda r: 10**r.uniform(-1, 1))
         # _hparam('irm_lambda', 1e2, lambda r: 10**r.uniform(-1, 5))
         # _hparam('irm_penalty_anneal_iters', 500, lambda r: int(10**r.uniform(0, 4)))
+
+    elif algorithm == 'VITA_color':
+        _hparam('irm_lambda', 1e2, lambda r: 10**r.uniform(-1, 5))
+        _hparam('irm_penalty_anneal_iters', 500,
+                lambda r: int(10**r.uniform(0, 4)))
+        # _hparam('z_dim', 64, lambda r: int(r.choice([32, 128])))
+        _hparam('phase1_steps', 5000, lambda r: int(r.choice([5000])))
+        _hparam('phase2_steps', 1000, lambda r: int(r.choice([1000])))
+        _hparam('finetune_steps', 1000, lambda r: int(r.choice([1000])))
+        _hparam('finetune_logits', 'tilde', lambda r: r.choice(['tilde']))
+        # _hparam('mi_lambda', 1., lambda r: 10**r.uniform(-1, 1))
+        _hparam('domain_lambda',  1., lambda r: 10**r.uniform(-1, 1))
 
 
 

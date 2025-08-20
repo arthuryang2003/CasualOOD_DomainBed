@@ -265,11 +265,16 @@ if __name__ == "__main__":
 
     for step in range(start_step, n_steps):
         step_start_time = time.time()
-        minibatches_device = [(x.to(device), y.to(device))
-            for x,y in next(train_minibatches_iterator)]
+        batch = next(train_minibatches_iterator)
+        if len(batch[0]) == 2:
+            minibatches_device = [(x.to(device), y.to(device))
+                for x, y in batch]
+        else:
+            minibatches_device = [(x.to(device), y.to(device), z.to(device))
+                for x, y, z in batch]
         if args.task == "domain_adaptation" or args.algorithm == "CasualOODAlgorithm" or  args.algorithm == "VITA" :
             uda_device = [x.to(device)
-                for x,_ in next(uda_minibatches_iterator)]
+                for x, *_ in next(uda_minibatches_iterator)]
         else:
             uda_device = None
         step_vals = algorithm.update(minibatches_device, uda_device)
