@@ -1,0 +1,7 @@
+{
+    "resnet18": true,
+    "unfreeze_resnet_bn": true,
+    "resnet_dropout": 0,
+    "nonlinear_classifier": false,
+    "data_augmentation": true
+}
