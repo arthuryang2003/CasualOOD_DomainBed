@@ -81,48 +81,21 @@ Download the datasets:
 python3 -m domainbed.scripts.download \
        --data_dir=./domainbed/data
 ```
-python -m domainbed.scripts.sweep launch\
-       --data_dir=./domainbed/data \
-       --output_dir=./output/original \
-       --command_launcher smart_gpu \
-       --algorithms ERM IRM MMD \
-       --datasets ColoredMNIST \
 
 
+train
 
 ```sh
-python3 -m domainbed.scripts.train\
-       --data_dir=./domainbed/data/MNIST/\
-       --algorithm IGA\
-       --dataset ColoredMNIST\
-       --test_env 2
-```
 python3 -m domainbed.scripts.train\
        --data_dir=./domainbed/data/ \
        --algorithm CasualOODAlgorithm\
        --dataset CelebA_Blond \
        --uda_holdout_fraction=0.2 \
        --test_env 2
-
-```sh
-python -m domainbed.scripts.sweep launch\
-       --data_dir=/my/datasets/path\
-       --output_dir=/my/sweep/output/path\
-       --command_launcher MyLauncher
 ```
 
-Here, `MyLauncher` is your cluster's command launcher, as implemented in `command_launchers.py`. At the time of writing, the entire sweep trains tens of thousands of models (all algorithms x all datasets x 3 independent trials x 20 random hyper-parameter choices). You can pass arguments to make the sweep smaller:
+launch a sweep
 
-```sh
-python -m domainbed.scripts.sweep launch\
-       --data_dir=/my/datasets/path\
-       --output_dir=/my/sweep/output/path\
-       --command_launcher MyLauncher\
-       --algorithms ERM DANN\
-       --datasets RotatedMNIST VLCS\
-       --n_hparams 5\
-       --n_trials 1
-```
 ```sh
 CUDA_VISIBLE_DEVICES=5,6,7 \
 python -m domainbed.scripts.sweep launch \
@@ -138,6 +111,9 @@ python -m domainbed.scripts.sweep launch \
 
     
 ```
+
+NICO
+```shell
 python -m domainbed.scripts.sweep launch \
     --data_dir=./domainbed/data \
     --output_dir=./CMNIST/Main_wo_MMD \
@@ -150,30 +126,61 @@ python -m domainbed.scripts.sweep launch \
     --fixed_test_envs 3 \
     --skip_confirmation \
 
+```
+sh run
+```shell
+bash sweep/PACS/run.sh launch ./domainbed/data 6,7
+bash sweep/CelebA_Blond/run.sh launch ./domainbed/data 4,5
+bash sweep/NICOMixed/run.sh launch ./domainbed/data 4,5,6,7
+bash sweep/ColoredMNIST/run.sh launch ./domainbed/data 0,1
+```
+
+```shell
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
 python -m domainbed.scripts.sweep launch \
     --data_dir=./domainbed/data \
-    --output_dir=./CMNIST_CNN/VITA_IRM \
+    --output_dir=./CMNIST_CNN/VITA_0.1 \
     --command_launcher smart_gpu \
     --algorithms VITA \
-    --datasets ColoredMNIST \
-    --n_hparams 20 \
+    --datasets ColoredMNISTWithColor \
+    --n_hparams 60 \
     --n_trials 3 \
     --fixed_test_envs 2 \
-    --skip_confirmation \
+    --skip_confirmation 
+```
 
+
+visualize
+```shell
 python -m domainbed.scripts.visualize_cam \
     --data_dir=./domainbed/data \
-    --input_dir=./CMNIST_CNN/VITA  \
-    --dataset=ColoredMNIST \
+    --input_dir=./sweep/CelebA_Blond/VITA_IRM  \
+    --dataset=CelebA_Blond \
     --algorithm=VITA \
     --test_env=2
-       
+```
+
+
+combined_inference
+```shell
 python -m domainbed.scripts.combined_inference \
 --data_dir=./domainbed/data \
---input_dir ./CMNIST_CNN/VITA_IRM \
+--input_dir ./sweep/ColoredMNISTWithColor/VITA \
+--dataset ColoredMNISTWithColor \
+--algorithm VITA \
+--test_env 2 
+```
+plot_combined_logits
+```shell
+python -m domainbed.scripts.plot_combined_logits \
+--data_dir=./domainbed/data \
+--input_dir ./sweep/ColoredMNIST/VITA_IRM \
 --dataset ColoredMNIST \
 --algorithm VITA \
---test_env 2
+--test_env 2 \
+--out_dir ./plot/CMNIST
+```
+
 
 
 After all jobs have either succeeded or failed, you can delete the data from failed jobs with ``python -m domainbed.scripts.sweep delete_incomplete`` and then re-launch them by running ``python -m domainbed.scripts.sweep launch`` again. Specify the same command-line arguments in all calls to `sweep` as you did the first time; this is how the sweep script knows which jobs were launched originally.
@@ -184,25 +191,18 @@ To view the results of your sweep:
 
 ````sh
 python -m domainbed.scripts.collect_results\
-    --input_dir=./sweep/PACS/outputs 
+  --input_dir ./sweep/ColoredMNIST/VITA_IRM 
 ````
 
 List top haparams  of your sweep:
 
-python -m domainbed.scripts.list_top_hparams   --input_dir=./CMNIST_CNN/VITA_IRM_Zu   --dataset=ColoredMNIST --algorithm=VITA_Zu_only --test_env=2
-
-
 ````sh
-python -m domainbed.scripts.list_top_hparams        
-       --input_dir=./output/Zu_mi_mmd \
-````
-python -m domainbed.scripts.list_top_hparams \     
-    --input_dir=./output/Main_wo_MMD \
-    --dataset=ColoredMNIST \
-    --algorithm=CasualOODAlgorithm \
-    --test_env=2 \
+python -m domainbed.scripts.list_top_hparams     --input_dir ./sweep/ColoredMNISTWithColor/VITA_0.0_v2    --dataset=ColoredMNISTWithColor --algorithm=VITA --test_env=2
 
-bash sweep/PACS/run.sh launch ./domainbed/data 4,5,6,7
+````
+
+
+
 
 ## Running unit tests
 

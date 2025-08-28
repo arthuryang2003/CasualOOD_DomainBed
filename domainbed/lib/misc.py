@@ -3,7 +3,7 @@
 """
 Things that don't belong anywhere else
 """
-
+import json
 import copy
 import math
 import hashlib
@@ -651,3 +651,27 @@ def check_single_class_prediction(network, loader, device):
 
     if all_same:
         raise RuntimeError("Model predicted a single class for all inputs")
+
+
+class NpEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        if isinstance(obj, (np.floating,)):
+            return float(obj)
+        if isinstance(obj, (np.bool_,)):
+            return bool(obj)
+        if isinstance(obj, (np.ndarray,)):
+            return obj.tolist()
+        try:
+            # 兼容 torch 标量/张量（若有）
+            import torch
+            if isinstance(obj, torch.Tensor):
+                return obj.item() if obj.dim() == 0 else obj.tolist()
+            if isinstance(obj, torch.device):
+                return str(obj)
+            if isinstance(obj, torch.dtype):
+                return str(obj)
+        except Exception:
+            pass
+        return super().default(obj)

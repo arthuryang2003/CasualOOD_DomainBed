@@ -163,8 +163,8 @@ def combined_inference(model: algorithms.Algorithm,
         PY_raw = None
         y_soft_all = []
 
-        for x, _ in loader:
-            x = x.to(device)
+        for batch in loader:
+            x = batch[0].to(device)
             z_u, z_s, u_logits, s_logits, tilde_s_logits, _ = model.encode(x)
             stable_pred = F.softmax(u_logits, dim=1)  # [B, C]
             y_soft_all.append(stable_pred)
@@ -187,9 +187,9 @@ def combined_inference(model: algorithms.Algorithm,
         total = 0
         log_PY = torch.log(PY).to(device)
 
-        for x, y in loader:
-            x = x.to(device)
-            y = _to_label_index(y.to(device), num_classes)
+        for batch in loader:
+            x = batch[0].to(device)
+            y = batch[1].to(device)
 
             z_u, z_s, u_logits, s_logits, tilde_s_logits, _ = model.encode(x)
             stable_prob = F.softmax(u_logits, dim=1)         # [B, C]

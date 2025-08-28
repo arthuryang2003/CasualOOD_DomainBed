@@ -251,3 +251,50 @@ class IIDValidationAccuracyMethod(SelectionMethod):
         if not len(test_records):
             return None
         return test_records.map(self._step_acc).argmax('val_acc')
+
+
+
+class VITAPreFTSelectionMethod(SelectionMethod):
+    """Select accuracy before VITA's test-time finetuning.
+
+    For algorithms that follow the VITA schedule, this method returns the
+    accuracy at the last step of phase 2 (i.e. ``phase1_steps + phase2_steps -
+    1``), which corresponds to the model before test-time adaptation.
+    """
+    name = "VITA pre-finetune accuracy"
+
+    @classmethod
+    def run_acc(cls, run_records):
+        test_records = get_test_records(run_records)
+        if not len(test_records):
+            return None
+
+        hparams = test_records[0].get('hparams', {})
+        phase1 = hparams.get('phase1_steps')
+        phase2 = hparams.get('phase2_steps')
+        if phase1 is None or phase2 is None:
+            return None
+        target_step = phase1 + phase2 - 1
+
+        # Try to find the record exactly at the boundary of phase 2
+        target_records = test_records.filter(lambda r: r['step'] == target_step)
+        if len(target_records):
+            chosen_record = target_records[0]
+        else:
+            # Fall back to the last record before entering phase 3
+            pre_records = test_records.filter(lambda r: r['step'] < phase1 + phase2)
+            if not len(pre_records):
+                return None
+            chosen_record = pre_records.sorted(lambda r: r['step'])[-1]
+
+        test_env = test_records[0]['args']['test_envs'][0]
+        test_in_key = f'env{test_env}_in_acc'
+        test_out_key = f'env{test_env}_out_acc'
+        val_acc = chosen_record.get(test_out_key, chosen_record.get(test_in_key))
+        if val_acc is None or test_in_key not in chosen_record:
+            return None
+
+        return {
+            'val_acc': val_acc,
+            'test_acc': chosen_record[test_in_key]
+        }

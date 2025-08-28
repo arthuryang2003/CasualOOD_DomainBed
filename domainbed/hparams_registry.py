@@ -1,7 +1,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import numpy as np
 from domainbed.lib import misc
-
+import math
 
 def _define_hparam(hparams, hparam_name, default_val, random_val_fn):
     hparams[hparam_name] = (hparams, hparam_name, default_val, random_val_fn)
@@ -211,9 +211,10 @@ def _hparams(algorithm, dataset, random_seed):
         # _hparam('mmd_kernel', 'gaussian', lambda r: r.choice(['gaussian']))
 
     elif algorithm == 'VITA_Zu_only':
-        _hparam('irm_lambda', 1e2, lambda r: 10**r.uniform(-1, 5))
-        _hparam('irm_penalty_anneal_iters', 500,
-                lambda r: int(10**r.uniform(0, 4)))
+        _hparam('irm_lambda', 70,
+                lambda r: 10 ** r.uniform(math.log10(50), math.log10(200)))
+        _hparam('irm_penalty_anneal_iters', 3500,
+                lambda r: int(10 ** r.uniform(math.log10(3000), math.log10(4500))))
         # _hparam('z_dim', 64, lambda r: int(r.choice([32, 128])))
         _hparam('mi_lambda', 1., lambda r: 10**r.uniform(-1, 1))
         _hparam('domain_lambda',  1., lambda r: 10**r.uniform(-1, 1))
@@ -229,18 +230,17 @@ def _hparams(algorithm, dataset, random_seed):
         _hparam('domain_lambda',  1., lambda r: 10**r.uniform(-1, 1))
 
     elif algorithm == 'VITA':
-        _hparam('irm_lambda', 1e2, lambda r: 10**r.uniform(-1, 5))
-        _hparam('irm_penalty_anneal_iters', 500,
-                lambda r: int(10**r.uniform(0, 4)))
+        _hparam('irm_lambda', 70,
+                lambda r: 10 ** r.uniform(math.log10(50), math.log10(200)))
+        _hparam('irm_penalty_anneal_iters', 3500,
+                lambda r: int(10 ** r.uniform(math.log10(3000), math.log10(4500))))
         # _hparam('z_dim', 64, lambda r: int(r.choice([32, 128])))
-        _hparam('phase1_steps', 5000, lambda r: int(r.choice([5000])))
+        _hparam('phase1_steps', 5001, lambda r: int(r.choice([5001])))
         _hparam('phase2_steps', 1000, lambda r: int(r.choice([1000])))
         _hparam('finetune_steps', 1000, lambda r: int(r.choice([1000])))
         _hparam('finetune_logits', 'tilde', lambda r: r.choice(['tilde']))
         _hparam('mi_lambda', 1., lambda r: 10**r.uniform(-1, 1))
         _hparam('domain_lambda',  1., lambda r: 10**r.uniform(-1, 1))
-        # _hparam('irm_lambda', 1e2, lambda r: 10**r.uniform(-1, 5))
-        # _hparam('irm_penalty_anneal_iters', 500, lambda r: int(10**r.uniform(0, 4)))
 
     elif algorithm == 'VITA_color':
         _hparam('irm_lambda', 1e2, lambda r: 10**r.uniform(-1, 5))

@@ -326,8 +326,8 @@ if __name__ == "__main__":
 
             epochs_path = os.path.join(args.output_dir, 'results.jsonl')
             with open(epochs_path, 'a') as f:
-                f.write(json.dumps(results, sort_keys=True) + "\n")
-
+                json.dump(results, f, sort_keys=True, cls=misc.NpEncoder)
+                f.write("\n")
             algorithm_dict = algorithm.state_dict()
             start_step = step + 1
             checkpoint_vals = collections.defaultdict(lambda: [])

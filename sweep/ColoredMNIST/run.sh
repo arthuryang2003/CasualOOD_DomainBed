@@ -1,4 +1,4 @@
-dataset=NICOMixed
+dataset=ColoredMNIST
 command=$1
 data_dir=$2
 gpu_id=$3
@@ -8,10 +8,9 @@ python3 -m domainbed.scripts.sweep ${command}\
        --datasets ${dataset}\
        --algorithms VITA \
        --data_dir ${data_dir}\
-       --command_launcher smart_gpu \
-       --fixed_test_envs 3\
-       --holdout_fraction 0.1\
-       --n_hparams 20 \
+       --command_launcher smart_gpu\
+       --fixed_test_envs 2\
+       --n_hparams 60\
        --n_trials 3\
        --skip_confirmation\
        --hparams "$(<sweep/${dataset}/hparams.json)"\
