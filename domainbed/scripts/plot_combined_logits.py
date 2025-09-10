@@ -1,7 +1,7 @@
 import argparse
 import os
 from typing import List
-
+from collections import defaultdict
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -10,36 +10,53 @@ import torch.nn.functional as F
 from domainbed import datasets, algorithms
 from domainbed.lib import reporting
 from domainbed import model_selection
-from domainbed.lib.fast_data_loader import VisualizeDataLoader
+from domainbed.lib.fast_data_loader import VisualizeDataLoader, FastDataLoader
+
 
 def find_best_model_dir(input_dir: str, dataset: str, algorithm: str, test_env: int) -> str:
-    """Return the output directory of the best run for the given setting."""
+    """Return the output directory of the best run for the given setting.
+
+    The search mimics the logic in ``collect_results.py`` by first selecting
+    the best run for each hyperparameter seed within every trial (using
+    ``OracleSelectionMethod``), then averaging validation accuracy across
+    trials. The run with the highest mean validation accuracy determines the
+    returned model directory.
+    """
+
     records = reporting.load_records(input_dir)
-    records = reporting.get_grouped_records(records)
-    records = records.filter(
+    grouped = reporting.get_grouped_records(records)
+    grouped = grouped.filter(
         lambda r: r['dataset'] == dataset and
         r['algorithm'] == algorithm and
         r['test_env'] == test_env
     )
 
-    if not len(records):
+    if not len(grouped):
         raise RuntimeError('No records found for the specified configuration')
 
-    best_dir = None
-    best_val = -float('inf')
-
-    for group in records:
+    # Accumulate val accuracies and corresponding dirs per hparams seed
+    by_hparams = defaultdict(list)
+    for group in grouped:
         hparams_accs = model_selection.OracleSelectionMethod.hparams_accs(group['records'])
-        if not hparams_accs:
-            continue
-        run_acc, run_records = hparams_accs[0]
-        if run_acc['val_acc'] > best_val:
-            best_val = run_acc['val_acc']
-            best_dir = run_records[0]['args']['output_dir']
+        for run_acc, run_records in hparams_accs:
+            hseed = run_records[0]['args']['hparams_seed']
+            out_dir = run_records[0]['args']['output_dir']
+            by_hparams[hseed].append((run_acc['val_acc'], out_dir))
 
-    if best_dir is None:
+    if not by_hparams:
         raise RuntimeError('Could not determine best model directory')
 
+    # Choose hyperparameter seed with highest mean validation accuracy
+    best_seed = None
+    best_val = -float('inf')
+    for hseed, vals_dirs in by_hparams.items():
+        mean_val = np.mean([v for v, _ in vals_dirs])
+        if mean_val > best_val:
+            best_val = mean_val
+            best_seed = hseed
+
+    # Within the best hyperparameter seed, pick the run with highest val_acc
+    best_dir = max(by_hparams[best_seed], key=lambda x: x[0])[1]
     return best_dir
 
 
@@ -102,13 +119,12 @@ def main(args: argparse.Namespace) -> None:
     dataset = datasets.get_dataset_class(args.dataset)(
         args.data_dir, [args.test_env], model.hparams
     )
-    eval_loader = torch.utils.data.DataLoader(
-        dataset[args.test_env],
+    eval_loader = FastDataLoader(
+        dataset=dataset[args.test_env],
         batch_size=args.batch_size,
-        shuffle=False,
         num_workers=dataset.N_WORKERS,
-        pin_memory=torch.cuda.is_available()
     )
+
 
     num_classes = model.num_classes if hasattr(model, 'num_classes') else dataset.num_classes
     ks = np.linspace(0.0, 1.0, 11)

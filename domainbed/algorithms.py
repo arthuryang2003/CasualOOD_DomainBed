@@ -3734,17 +3734,26 @@ class VITA(VITA_Zu_only):
     def __init__(self, input_shape, num_classes, num_domains, hparams):
         super(VITA, self).__init__(input_shape, num_classes, num_domains, hparams)
 
-        # 额外模块
+        # Extra modules
         self.mask = nn.Parameter(torch.ones(self.z_dim))
         self.classifier_tilde_s = networks.Classifier(self.z_dim, num_classes, is_nonlinear=True)
 
-        # 阶段步数
+        # Phases
         self.phase1_steps = hparams.get('phase1_steps', 0)
         self.phase2_steps = hparams.get('phase2_steps', 0)
         self.finetune_steps = hparams.get('finetune_steps', 0)
 
-        # 计数器：用于阶段切换
+
         self.update_steps = 0
+
+        # Trainable reweighting module combining u_logits and tilde_s_logits
+        concat_dim = self.z_dim * 2
+        self.reweighting = nn.Sequential(
+            nn.Linear(concat_dim, self.z_dim),
+            nn.ReLU(),
+            nn.Linear(self.z_dim, 2),
+            nn.Softmax(dim=1)
+        )
 
         # 默认进入 phase 1
         self.set_phase(1)
@@ -3758,7 +3767,15 @@ class VITA(VITA_Zu_only):
         u_logits = self.classifier_u(z_u)
         s_logits = self.classifier_tilde_s(z_s)
         tilde_s_logits = self.classifier_tilde_s(tilde_z_s)
-        combined_logits = u_logits + tilde_s_logits
+
+        concat_z = torch.cat([z_u, tilde_z_s], dim=1)
+        weights = self.reweighting(concat_z)  # (batch_size, 2)
+
+        combined_logits = (
+            weights[:, 0:1] * u_logits
+            + weights[:, 1:2] * tilde_s_logits
+        )
+
         return z_u, z_s, u_logits, s_logits, tilde_s_logits, combined_logits
 
     def update(self, minibatches, unlabeled=None):
@@ -3825,9 +3842,7 @@ class VITA(VITA_Zu_only):
                     + list(self.projection_phi.parameters())
                     + list(self.projection_psi.parameters())
                     + list(self.classifier_u.parameters())
-                    + list(self.domain_classifier.parameters())
-                    + list(self.classifier_tilde_s.parameters())  # phase1 也可以一并训练 s-head（可选）
-                    + [self.mask],  # 可选：不想动 mask 可移除
+                    + list(self.domain_classifier.parameters()),
                     lr=self.hparams["lr"],
                     weight_decay=self.hparams["weight_decay"],
                 )
@@ -3848,26 +3863,37 @@ class VITA(VITA_Zu_only):
             }
 
         elif self.phase == 2:
-            # 监督训练 mask + s-head
-            logits = combined_logits if self.hparams.get('finetune_logits', 'tilde') == 'combined' else tilde_s_logits
-            loss = F.cross_entropy(logits, all_y)
+            # supervised train mask + s_head
+            loss_s=F.cross_entropy(tilde_s_logits, all_y)
+            loss_cls=F.cross_entropy(combined_logits, all_y)
+            loss = loss_s+loss_cls
 
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
 
-            return {'loss': loss.item()}
+            return {
+                'loss_total': loss.item(),
+                'loss_cls': loss_cls.item(),
+                'loss_s': loss_s.item()
+            }
 
-        else:  # finetune: 伪标签
-            logits = combined_logits if self.hparams.get('finetune_logits', 'tilde') == 'combined' else tilde_s_logits
+        else:  # finetune: pseudo-labels from u_head
             pseudo_labels = u_logits.detach().softmax(1).argmax(1)
-            loss = F.cross_entropy(logits, pseudo_labels)
+            loss_s = F.cross_entropy(tilde_s_logits, pseudo_labels)
+            loss_cls = F.cross_entropy(combined_logits, pseudo_labels)
+
+            loss = loss_s + loss_cls
 
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
 
-            return {'loss': loss.item()}
+            return {
+                'loss_total': loss.item(),
+                'loss_cls': loss_cls.item(),
+                'loss_s': loss_s.item()
+            }
 
     def predict(self, x):
         _, _, u_logits, _, _, combined_logits = self.encode(x)
@@ -3875,42 +3901,42 @@ class VITA(VITA_Zu_only):
             return u_logits
         else:
             return combined_logits
-#
 
     def set_phase(self, phase):
-        """设置阶段并自动创建优化器"""
+        """Create optimizer for each phase (color head instead of domain head)."""
         self.phase = phase
         if phase == 1:
-            self.optimizer = torch.optim.Adam(self.get_parameters_train_phase1(),
-                                              lr=self.hparams["lr"],
-                                              weight_decay=self.hparams["weight_decay"])
+            # Train: featurizer + phi/psi + u_head + color_head
+            self.optimizer = torch.optim.Adam(
+                list(self.featurizer.parameters())
+                + list(self.projection_phi.parameters())
+                + list(self.projection_psi.parameters())
+                + list(self.classifier_u.parameters())
+                + list(self.domain_classifier.parameters()),
+                lr=self.hparams["lr"],
+                weight_decay=self.hparams["weight_decay"]
+            )
         elif phase == 2:
-            self.optimizer = torch.optim.Adam(self.get_parameters_train_phase2(),
-                                              lr=self.hparams["lr"],
-                                              weight_decay=self.hparams["weight_decay"])
+            # Train: s_head + mask
+            self.optimizer = torch.optim.Adam(
+                list(self.classifier_tilde_s.parameters())
+                + list(self.reweighting.parameters())
+                + [self.mask],
+                lr=self.hparams["lr"],
+                weight_decay=self.hparams["weight_decay"],
+            )
             self.freeze_bn()
         elif phase == 3 or phase == "finetune":
-            self.optimizer = torch.optim.Adam(self.get_parameters_finetune(),
-                                              lr=self.hparams["lr"],
-                                              weight_decay=self.hparams["weight_decay"])
+            # Finetune: s_head + mask
+            self.optimizer = torch.optim.Adam(
+                list(self.classifier_tilde_s.parameters())
+                + [self.mask],
+                lr=self.hparams["lr"],
+                weight_decay=self.hparams["weight_decay"],
+            )
             self.freeze_bn()
         else:
             raise ValueError("Unsupported phase: must be 1, 2, or 'finetune'")
-
-    def get_parameters_train_phase1(self):
-        base_params = itertools.chain(
-            self.projection_phi.parameters(),
-            self.projection_psi.parameters(),
-            self.classifier_u.parameters(),
-            self.domain_classifier.parameters())
-        return list(self.featurizer.parameters()) + list(base_params)
-
-    def get_parameters_train_phase2(self):
-        return list(self.classifier_tilde_s.parameters()) + [self.mask]
-
-    def get_parameters_finetune(self):
-        return list(self.classifier_tilde_s.parameters()) + [self.mask]
-
     def freeze_bn(self):
         """Freeze BatchNorm statistics for modules contributing to ``u_logits``."""
         u_related = set(chain(
@@ -3924,86 +3950,87 @@ class VITA(VITA_Zu_only):
                 m.track_running_stats = False
 
 
-class VITA_Zs_color(VITA_Zu_only):
-    """Variant of VITA_Zu_only where the z_s branch predicts color labels."""
+# class VITA_Zs_color(VITA_Zu_only):
+#     """Variant of VITA_Zu_only where the z_s branch predicts color labels."""
+#
+#     def __init__(self, input_shape, num_classes, num_domains, hparams):
+#         super().__init__(input_shape, num_classes, num_domains, hparams)
+#
+#         # Replace domain classifier with a two-class color classifier
+#         self.color_classifier = networks.Classifier(self.z_dim, 2, is_nonlinear=True)
+#
+#         # Reinitialize optimizer to include the color classifier parameters
+#         self.optimizer = torch.optim.Adam(
+#             list(self.featurizer.parameters()) +
+#             list(self.projection_phi.parameters()) +
+#             list(self.projection_psi.parameters()) +
+#             list(self.classifier_u.parameters()) +
+#             list(self.color_classifier.parameters()),
+#             lr=self.hparams["lr"],
+#             weight_decay=self.hparams['weight_decay'],
+#         )
+#
+#     def update(self, minibatches, unlabeled=None):
+#         all_x = torch.cat([x for x, _, _ in minibatches])
+#         all_y = torch.cat([y for _, y, _ in minibatches])
+#         color_labels = torch.cat([c for _, _, c in minibatches])
+#         domain_labels = torch.cat([
+#             torch.full((x.size(0),), i, dtype=torch.long, device=all_x.device)
+#             for i, (x, _, _) in enumerate(minibatches)
+#         ])
+#
+#         z_u, z_s, u_logits = self.encode(all_x)
+#         loss_cls = F.cross_entropy(u_logits, all_y)
+#
+#         penalty = 0.
+#         for d in domain_labels.unique():
+#             logits_d = u_logits[domain_labels == d]
+#             y_d = all_y[domain_labels == d]
+#             penalty += self._irm_penalty(logits_d, y_d)
+#         penalty /= len(minibatches)
+#
+#         color_logits = self.color_classifier(z_s)
+#         loss_color = F.cross_entropy(color_logits, color_labels)
+#         loss_mi = self.compute_conditional_MI(z_u, z_s, all_y, self.num_classes)
+#
+#         penalty_weight = (
+#             self.hparams['irm_lambda']
+#             if self.update_count >= self.hparams['irm_penalty_anneal_iters']
+#             else 1.0
+#         )
+#
+#         loss = (
+#             loss_cls
+#             + self.hparams.get('mi_lambda', 0.) * loss_mi
+#             + penalty_weight * penalty
+#             + self.hparams.get('domain_lambda', 0.) * loss_color
+#         )
+#
+#         if self.update_count == self.hparams['irm_penalty_anneal_iters']:
+#             self.optimizer = torch.optim.Adam(
+#                 list(self.featurizer.parameters()) +
+#                 list(self.projection_phi.parameters()) +
+#                 list(self.projection_psi.parameters()) +
+#                 list(self.classifier_u.parameters()) +
+#                 list(self.color_classifier.parameters()),
+#                 lr=self.hparams["lr"],
+#                 weight_decay=self.hparams['weight_decay'],
+#             )
+#
+#         self.optimizer.zero_grad()
+#         loss.backward()
+#         self.optimizer.step()
+#
+#         self.update_count += 1
+#
+#         return {
+#             'loss_total': loss.item(),
+#             'loss_cls': loss_cls.item(),
+#             'loss_irm': penalty.item(),
+#             'loss_color': loss_color.item(),
+#             'loss_mi': loss_mi.item(),
+#         }
 
-    def __init__(self, input_shape, num_classes, num_domains, hparams):
-        super().__init__(input_shape, num_classes, num_domains, hparams)
-
-        # Replace domain classifier with a two-class color classifier
-        self.color_classifier = networks.Classifier(self.z_dim, 2, is_nonlinear=True)
-
-        # Reinitialize optimizer to include the color classifier parameters
-        self.optimizer = torch.optim.Adam(
-            list(self.featurizer.parameters()) +
-            list(self.projection_phi.parameters()) +
-            list(self.projection_psi.parameters()) +
-            list(self.classifier_u.parameters()) +
-            list(self.color_classifier.parameters()),
-            lr=self.hparams["lr"],
-            weight_decay=self.hparams['weight_decay'],
-        )
-
-    def update(self, minibatches, unlabeled=None):
-        all_x = torch.cat([x for x, _, _ in minibatches])
-        all_y = torch.cat([y for _, y, _ in minibatches])
-        color_labels = torch.cat([c for _, _, c in minibatches])
-        domain_labels = torch.cat([
-            torch.full((x.size(0),), i, dtype=torch.long, device=all_x.device)
-            for i, (x, _, _) in enumerate(minibatches)
-        ])
-
-        z_u, z_s, u_logits = self.encode(all_x)
-        loss_cls = F.cross_entropy(u_logits, all_y)
-
-        penalty = 0.
-        for d in domain_labels.unique():
-            logits_d = u_logits[domain_labels == d]
-            y_d = all_y[domain_labels == d]
-            penalty += self._irm_penalty(logits_d, y_d)
-        penalty /= len(minibatches)
-
-        color_logits = self.color_classifier(z_s)
-        loss_color = F.cross_entropy(color_logits, color_labels)
-        loss_mi = self.compute_conditional_MI(z_u, z_s, all_y, self.num_classes)
-
-        penalty_weight = (
-            self.hparams['irm_lambda']
-            if self.update_count >= self.hparams['irm_penalty_anneal_iters']
-            else 1.0
-        )
-
-        loss = (
-            loss_cls
-            + self.hparams.get('mi_lambda', 0.) * loss_mi
-            + penalty_weight * penalty
-            + self.hparams.get('domain_lambda', 0.) * loss_color
-        )
-
-        if self.update_count == self.hparams['irm_penalty_anneal_iters']:
-            self.optimizer = torch.optim.Adam(
-                list(self.featurizer.parameters()) +
-                list(self.projection_phi.parameters()) +
-                list(self.projection_psi.parameters()) +
-                list(self.classifier_u.parameters()) +
-                list(self.color_classifier.parameters()),
-                lr=self.hparams["lr"],
-                weight_decay=self.hparams['weight_decay'],
-            )
-
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-
-        self.update_count += 1
-
-        return {
-            'loss_total': loss.item(),
-            'loss_cls': loss_cls.item(),
-            'loss_irm': penalty.item(),
-            'loss_color': loss_color.item(),
-            'loss_mi': loss_mi.item(),
-        }
 #
 # #
 # class VITA(VITA_Zu_only):
@@ -4175,6 +4202,15 @@ class VITA_Zs_color(VITA_Zu_only):
 #         self.finetune_steps = hparams.get('finetune_steps', 0)
 #         self.update_steps = 0  # for phase switching
 #
+#         # Trainable reweighting module combining u_logits and tilde_s_logits
+#         concat_dim = self.z_dim * 2
+#         self.reweighting = nn.Sequential(
+#             nn.Linear(concat_dim, self.z_dim),
+#             nn.ReLU(),
+#             nn.Linear(self.z_dim, 2),
+#             nn.Softmax(dim=1)
+#         )
+#
 #         # Default to phase 1
 #         self.set_phase(1)
 #
@@ -4188,7 +4224,15 @@ class VITA_Zs_color(VITA_Zu_only):
 #         u_logits = self.classifier_u(z_u)
 #         s_logits = self.classifier_tilde_s(z_s)
 #         tilde_s_logits = self.classifier_tilde_s(tilde_z_s)
-#         combined_logits = u_logits + tilde_s_logits
+#
+#         concat_z = torch.cat([z_u, tilde_z_s], dim=1)
+#         weights = self.reweighting(concat_z)  # (batch_size, 2)
+#
+#         combined_logits = (
+#             weights[:, 0:1] * u_logits
+#             + weights[:, 1:2] * tilde_s_logits
+#         )
+#
 #         return z_u, z_s, u_logits, s_logits, tilde_s_logits, combined_logits
 #
 #     def update(self, minibatches, unlabeled=None):
@@ -4265,9 +4309,7 @@ class VITA_Zs_color(VITA_Zu_only):
 #                     + list(self.projection_phi.parameters())
 #                     + list(self.projection_psi.parameters())
 #                     + list(self.classifier_u.parameters())
-#                     + list(self.color_classifier.parameters())          # use color head
-#                     + list(self.classifier_tilde_s.parameters())        # (optional) also train s-head
-#                     + [self.mask],                                      # (optional) include mask
+#                     + list(self.color_classifier.parameters()),     # use color head
 #                     lr=self.hparams["lr"],
 #                     weight_decay=self.hparams["weight_decay"],
 #                 )
@@ -4289,28 +4331,43 @@ class VITA_Zs_color(VITA_Zu_only):
 #
 #         # ------ Phase 2: supervised train mask + s_head ------
 #         elif self.phase == 2:
-#             logits_choice = self.hparams.get('finetune_logits', 'tilde')
-#             logits = combined_logits if logits_choice == 'combined' else tilde_s_logits
-#             loss = F.cross_entropy(logits, all_y)
+#
+#
+#             loss_s=F.cross_entropy(tilde_s_logits, all_y)
+#
+#             loss_cls=F.cross_entropy(combined_logits, all_y)
+#
+#             loss = loss_s+loss_cls
 #
 #             self.optimizer.zero_grad()
 #             loss.backward()
 #             self.optimizer.step()
 #
-#             return {'loss': loss.item()}
+#             return {
+#                 'loss_total': loss.item(),
+#                 'loss_cls': loss_cls.item(),
+#                 'loss_s': loss_s.item()
+#             }
 #
 #         # ------ Finetune: pseudo-labels from u_head ------
 #         else:
-#             logits_choice = self.hparams.get('finetune_logits', 'tilde')
-#             logits = combined_logits if logits_choice == 'combined' else tilde_s_logits
+#
 #             pseudo_labels = u_logits.detach().softmax(1).argmax(1)
-#             loss = F.cross_entropy(logits, pseudo_labels)
+#             loss_s = F.cross_entropy(tilde_s_logits, pseudo_labels)
+#
+#             loss_cls = F.cross_entropy(combined_logits, pseudo_labels)
+#
+#             loss = loss_s + loss_cls
 #
 #             self.optimizer.zero_grad()
 #             loss.backward()
 #             self.optimizer.step()
 #
-#             return {'loss': loss.item()}
+#             return {
+#                 'loss_total': loss.item(),
+#                 'loss_cls': loss_cls.item(),
+#                 'loss_s': loss_s.item()
+#             }
 #
 #     def predict(self, x):
 #         _, _, u_logits, _, _, combined_logits = self.encode(x)
@@ -4336,30 +4393,20 @@ class VITA_Zs_color(VITA_Zu_only):
 #         elif phase == 2:
 #             # Train: s_head + mask
 #             self.optimizer = torch.optim.Adam(
-#                 list(self.classifier_tilde_s.parameters()) + [self.mask],
+#                 list(self.classifier_tilde_s.parameters())
+#                 + list(self.reweighting.parameters())
+#                 + [self.mask],
 #                 lr=self.hparams["lr"],
-#                 weight_decay=self.hparams["weight_decay"]
+#                 weight_decay=self.hparams["weight_decay"],
 #             )
 #             self.freeze_bn()
 #         elif phase == 3 or phase == "finetune":
 #             # Finetune: s_head + mask
 #             self.optimizer = torch.optim.Adam(
-#                 list(self.classifier_tilde_s.parameters()) + [self.mask],
+#                 list(self.classifier_tilde_s.parameters())
+#                 + [self.mask],
 #                 lr=self.hparams["lr"],
-#                 weight_decay=self.hparams["weight_decay"]
+#                 weight_decay=self.hparams["weight_decay"],
 #             )
-#             self.freeze_bn()
-#         else:
-#             raise ValueError("Unsupported phase: must be 1, 2, or 'finetune'")
 #
-#     def freeze_bn(self):
-#         """Freeze BatchNorm statistics for modules contributing to ``u_logits``."""
-#         u_related = set(chain(
-#             self.featurizer.modules(),
-#             self.projection_phi.modules(),
-#             self.classifier_u.modules()
-#         ))
-#         for m in self.modules():
-#             if m in u_related and isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d)):
-#                 m.eval()
-#                 m.track_running_stats = False
+#             self.freeze_bn()r 8

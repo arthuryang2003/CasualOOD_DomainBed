@@ -10,7 +10,7 @@ python3 -m domainbed.scripts.sweep ${command}\
        --data_dir ${data_dir}\
        --command_launcher smart_gpu\
        --fixed_test_envs 2\
-       --n_hparams 20\
+       --n_hparams 60\
        --n_trials 3\
        --skip_confirmation\
        --hparams "$(<sweep/${dataset}/hparams.json)"\

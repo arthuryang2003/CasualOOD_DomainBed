@@ -129,10 +129,11 @@ python -m domainbed.scripts.sweep launch \
 ```
 sh run
 ```shell
-bash sweep/PACS/run.sh launch ./domainbed/data 6,7
-bash sweep/CelebA_Blond/run.sh launch ./domainbed/data 4,5
-bash sweep/NICOMixed/run.sh launch ./domainbed/data 4,5,6,7
+bash sweep/PACS/run.sh launch ./domainbed/data 4,5,6,7
+bash sweep/CelebA_Blond/run.sh launch ./domainbed/data 2,3
+bash sweep/NICOMixed/run.sh launch ./domainbed/data 0,1
 bash sweep/ColoredMNIST/run.sh launch ./domainbed/data 0,1
+bash sweep/ColoredMNIST_IRM/run.sh launch ./domainbed/data 2,3,4,5,6,7
 ```
 
 ```shell
@@ -165,8 +166,8 @@ combined_inference
 ```shell
 python -m domainbed.scripts.combined_inference \
 --data_dir=./domainbed/data \
---input_dir ./sweep/ColoredMNISTWithColor/VITA \
---dataset ColoredMNISTWithColor \
+--input_dir ./sweep/ColoredMNIST/VITA_IRM \
+--dataset ColoredMNIST \
 --algorithm VITA \
 --test_env 2 
 ```
@@ -174,11 +175,11 @@ plot_combined_logits
 ```shell
 python -m domainbed.scripts.plot_combined_logits \
 --data_dir=./domainbed/data \
---input_dir ./sweep/ColoredMNIST/VITA_IRM \
---dataset ColoredMNIST \
+--input_dir ./sweep/NICOMixed/VITA_IRM \
+--dataset NICOMixed \
 --algorithm VITA \
---test_env 2 \
---out_dir ./plot/CMNIST
+--test_env 3 \
+--out_dir ./plot/NICOMixed
 ```
 
 
@@ -191,7 +192,7 @@ To view the results of your sweep:
 
 ````sh
 python -m domainbed.scripts.collect_results\
-  --input_dir ./sweep/ColoredMNIST/VITA_IRM 
+  --input_dir ./sweep/NICOMixed/VITA_IRM 
 ````
 
 List top haparams  of your sweep:

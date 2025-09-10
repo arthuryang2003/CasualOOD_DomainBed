@@ -86,6 +86,29 @@ def least_squares_correction(Y_unstable: torch.Tensor,
     return p
 
 @torch.no_grad()
+def stable_acc(model: algorithms.Algorithm,
+               loader: torch.utils.data.DataLoader,
+               num_classes: int,
+               device: torch.device) -> float:
+    """Accuracy of u_logits predictions over the given loader."""
+    model.eval()
+    correct = 0
+    total = 0
+    for batch in loader:
+        x = batch[0].to(device)
+        y = batch[1].to(device)
+        _, _, u_logits, _, _, _ = model.encode(x)
+        if num_classes == 2:
+            pred = (torch.sigmoid(u_logits).squeeze(-1) > 0.5).long()
+            pred = pred.argmax(dim=1)
+        else:
+            pred = torch.argmax(u_logits, dim=1)
+        correct += (pred == y).sum().item()
+        total += y.size(0)
+    return 100.0 * correct / max(total, 1)
+
+
+@torch.no_grad()
 def combined_inference(model: algorithms.Algorithm,
                        loader: torch.utils.data.DataLoader,
                        num_classes: int,
@@ -150,8 +173,8 @@ def combined_inference(model: algorithms.Algorithm,
             u_logit = torch.logit(y_unstable_corrected.clamp(eps, 1 - eps))
 
             combined_logit = x_logit + u_logit - log_prior
-            predict_prob = torch.sigmoid(combined_logit)
-            pred = (predict_prob > 0.5).long().argmax(dim=1)
+            pred = (torch.sigmoid(combined_logit).squeeze(-1) > 0.5).long()
+            pred = pred.argmax(dim=1)
 
             correct += (pred == y).sum().item()
             total += y.size(0)
@@ -239,8 +262,12 @@ def main(args):
     num_classes = model.num_classes if hasattr(model, 'num_classes') else dataset.num_classes
 
     # 评估
-    acc = combined_inference(model, eval_loader, num_classes, device)
-    msg = f"[Combined Inference] Test accuracy: {acc:.2f}%"
+    combined_acc = combined_inference(model, eval_loader, num_classes, device)
+    stable_only_acc = stable_acc(model, eval_loader, num_classes, device)
+    msg = (
+        f"[Combined Inference] Test accuracy: {combined_acc:.2f}% "
+        f"(u_logits only: {stable_only_acc:.2f}%)"
+    )
     print(msg)
 
     # 可选：保存到文件
