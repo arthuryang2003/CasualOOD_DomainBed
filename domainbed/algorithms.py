@@ -3881,18 +3881,15 @@ class VITA(VITA_Zu_only):
         else:  # finetune: pseudo-labels from u_head
             pseudo_labels = u_logits.detach().softmax(1).argmax(1)
             loss_s = F.cross_entropy(tilde_s_logits, pseudo_labels)
-            loss_cls = F.cross_entropy(combined_logits, pseudo_labels)
 
-            loss = loss_s + loss_cls
+            loss = loss_s
 
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
 
             return {
-                'loss_total': loss.item(),
-                'loss_cls': loss_cls.item(),
-                'loss_s': loss_s.item()
+                'loss_total': loss.item()
             }
 
     def predict(self, x):
