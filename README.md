@@ -129,10 +129,10 @@ python -m domainbed.scripts.sweep launch \
 ```
 sh run
 ```shell
-bash sweep/PACS/run.sh launch ./domainbed/data 4,5,6,7
-bash sweep/CelebA_Blond/run.sh launch ./domainbed/data 2,3
-bash sweep/NICOMixed/run.sh launch ./domainbed/data 0,1
-bash sweep/ColoredMNIST/run.sh launch ./domainbed/data 0,1
+bash sweep/PACS/run.sh launch ./domainbed/data 2,3,4,5,6,7
+bash sweep/CelebA_Blond/run.sh launch ./domainbed/data 4,5,6,7
+bash sweep/NICOMixed/run.sh launch ./domainbed/data 5,6,7
+bash sweep/ColoredMNIST/run.sh launch ./domainbed/data 4,5,6,7
 bash sweep/ColoredMNIST_IRM/run.sh launch ./domainbed/data 2,3,4,5,6,7
 ```
 
@@ -192,7 +192,7 @@ To view the results of your sweep:
 
 ````sh
 python -m domainbed.scripts.collect_results\
-  --input_dir ./sweep/NICOMixed/VITA_IRM 
+  --input_dir ./sweep/ColoredMNIST/VITA_IRM_Weight 
 ````
 
 List top haparams  of your sweep:

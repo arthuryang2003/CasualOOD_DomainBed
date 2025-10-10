@@ -186,29 +186,25 @@ def _hparams(algorithm, dataset, random_seed):
         else:
             _hparam('urm_discriminator_lr', 5e-5, lambda r: 10**r.uniform(-6, -4.5))
 
-    elif algorithm == 'CasualOOD_Z_only':
-        _hparam('z_dim', 64, lambda r: int(r.choice([64])))
+    elif algorithm == 'LFME':
+        _hparam('lfe_reg', 1.0, lambda r: 10 ** r.uniform(-2, 1))
 
-    elif algorithm == 'CasualOOD_Zu_only':
-        # _hparam('z_dim', 64, lambda r: int(r.choice([64])))
-        # _hparam('mi_lambda', 1., lambda r: r.uniform(0.1, 2.0))
-        _hparam('mi_lambda', 2., lambda r: 10**r.uniform(-1, 1))
-        # _hparam('mmd_lambda',  1., lambda r: 10**r.uniform(-1, 1))
-        _hparam('domain_lambda',  1., lambda r: 10**r.uniform(-1, 1))
-        # _hparam('mmd_kernel', 'gaussian', lambda r: r.choice(['gaussian', 'mean_cov']))
+    elif algorithm == 'ITTA':
+        if dataset == 'DomainNet':
+            _hparam('ada_lr', 0.1, lambda r: 10 ** r.uniform(-1, -1))
+        else:
+            _hparam('ada_lr', 1e-6, lambda r: 10 ** r.uniform(-6, -6))
 
-    elif algorithm == 'CasualOODAlgorithm':
-        _hparam('z_dim', 64, lambda r: int(r.choice([64])))
-        _hparam('phase1_steps', 5000, lambda r: int(r.choice([5000])))
-        _hparam('phase2_steps', 1000, lambda r: int(r.choice([1000])))
-        _hparam('finetune_steps', 1000, lambda r: int(r.choice([1000])))
-        # _hparam('finetune_logits', 'tilde', lambda r: r.choice(['tilde', 'combined']))
-        _hparam('finetune_logits', 'tilde', lambda r: r.choice(['tilde']))
-        # _hparam('mi_lambda', 1., lambda r: r.uniform(0.1, 2.0))
-        # _hparam('mi_lambda', 1., lambda r: 10**r.uniform(-1, 1))
-        _hparam('mmd_lambda',  1., lambda r: 10**r.uniform(-1, 1))
-        # _hparam('domain_lambda',  1., lambda r: 10**r.uniform(-1, 1))
-        # _hparam('mmd_kernel', 'gaussian', lambda r: r.choice(['gaussian']))
+    elif algorithm in ['RIDG']:
+        _hparam('momentum', 0.001, lambda r: 10 ** r.uniform(-4, -1))
+        _hparam('ridg_reg', 0.01, lambda r: 10 ** r.uniform(-2, -1))
+
+    elif algorithm in ['CauseEB']:
+        _hparam('alpha', 1, lambda r: 10 ** r.uniform(-1, 0))
+        _hparam('beta', 0.3, lambda r: 0.3 * 10 ** r.uniform(-1, 0))
+    elif algorithm == "ASGDRO":
+        _hparam('groupdro_eta', 1e-2, lambda r: 10 ** r.uniform(-3, -1))
+        _hparam('rho', 0.2, lambda r: r.choice([0.05, 0.2, 0.5, 0.8]))
 
     elif algorithm == 'VITA_Zu_only':
         _hparam('irm_lambda', 70,
@@ -221,39 +217,20 @@ def _hparams(algorithm, dataset, random_seed):
         # _hparam('irm_lambda', 1e2, lambda r: 10**r.uniform(-1, 5))
         # _hparam('irm_penalty_anneal_iters', 500, lambda r: int(10**r.uniform(0, 4)))
 
-
-    elif algorithm == 'VITA_Zs_color':
-        _hparam('irm_lambda', 1e2, lambda r: 10**r.uniform(-1, 5))
-        _hparam('irm_penalty_anneal_iters', 500,
-                lambda r: int(10**r.uniform(0, 4)))
-        _hparam('mi_lambda', 1., lambda r: 10**r.uniform(-1, 1))
-        _hparam('domain_lambda',  1., lambda r: 10**r.uniform(-1, 1))
-
     elif algorithm == 'VITA':
         _hparam('irm_lambda', 70,
                 lambda r: 10 ** r.uniform(math.log10(50), math.log10(200)))
         _hparam('irm_penalty_anneal_iters', 3500,
                 lambda r: int(10 ** r.uniform(math.log10(3000), math.log10(4500))))
         # _hparam('z_dim', 64, lambda r: int(r.choice([32, 128])))
+        # _hparam('irm_lambda', 1e2, lambda r: 10**r.uniform(-1, 5))
+        # _hparam('irm_penalty_anneal_iters', 500,
+        #         lambda r: int(10**r.uniform(0, 4)))
         _hparam('phase1_steps', 5001, lambda r: int(r.choice([5001])))
         _hparam('phase2_steps', 1000, lambda r: int(r.choice([1000])))
         _hparam('finetune_steps', 1000, lambda r: int(r.choice([1000])))
-        _hparam('finetune_logits', 'tilde', lambda r: r.choice(['tilde']))
         _hparam('mi_lambda', 1., lambda r: 10**r.uniform(-1, 1))
         _hparam('domain_lambda',  1., lambda r: 10**r.uniform(-1, 1))
-
-    elif algorithm == 'VITA_color':
-        _hparam('irm_lambda', 1e2, lambda r: 10**r.uniform(-1, 5))
-        _hparam('irm_penalty_anneal_iters', 500,
-                lambda r: int(10**r.uniform(0, 4)))
-        # _hparam('z_dim', 64, lambda r: int(r.choice([32, 128])))
-        _hparam('phase1_steps', 5000, lambda r: int(r.choice([5000])))
-        _hparam('phase2_steps', 1000, lambda r: int(r.choice([1000])))
-        _hparam('finetune_steps', 1000, lambda r: int(r.choice([1000])))
-        _hparam('finetune_logits', 'tilde', lambda r: r.choice(['tilde']))
-        # _hparam('mi_lambda', 1., lambda r: 10**r.uniform(-1, 1))
-        _hparam('domain_lambda',  1., lambda r: 10**r.uniform(-1, 1))
-
 
 
 

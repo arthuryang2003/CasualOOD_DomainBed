@@ -25,6 +25,7 @@ import warnings
 def count_done_err(path):
     done = 0
     err = 0
+    incomplete = 0
     total = 0
     for subdir in os.listdir(path):
         subpath = os.path.join(path, subdir)
@@ -37,11 +38,20 @@ def count_done_err(path):
 
         if os.path.isfile(done_file):
             done += 1
-        elif os.path.isfile(err_file) and os.path.getsize(err_file) > 0:
-            # err.txt 存在且有内容
-            err += 1
+        elif os.path.exists(subpath):
+            state = "incomplete"
+            if os.path.isfile(err_file) and os.path.getsize(err_file) > 0:
+                with open(err_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                if 'error' in content.lower():
+                    state = "error"
+            if state == "error":
+                err += 1
+            else:
+                incomplete += 1
 
-    return done, err, total
+    return done, err, incomplete, total
+
 
 def remove_key(d,key):
     new_d = d.copy()
@@ -147,7 +157,8 @@ def print_results_tables(records, selection_method, dataset, algorithm, latex):
 
     # read dataset names and sort (lexicographic order)
     dataset_names = Q(records).select("args.dataset").unique().sorted()
-    dataset_names = [d for d in datasets.DATASETS if d in dataset_names]
+    dataset_names = ([d for d in datasets.DATASETS if d in dataset_names]
+                     + [d for d in dataset_names if d not in datasets.DATASETS])
 
     for dataset in dataset_names:
         if latex:
@@ -166,7 +177,7 @@ def print_results_tables(records, selection_method, dataset, algorithm, latex):
                 ).select("sweep_acc"))
                 mean, err, table[i][j] = format_mean(trial_accs, latex)
                 means.append(mean)
-            if None in means:
+            if not means or None in means:
                 table[i][-1] = "X"
             else:
                 table[i][-1] = "{:.1f}".format(sum(means) / len(means))
@@ -199,7 +210,7 @@ def print_results_tables(records, selection_method, dataset, algorithm, latex):
                               )
             mean, err, table[i][j] = format_mean(trial_averages, latex)
             means.append(mean)
-        if None in means:
+        if not means or None in means:
             table[i][-1] = "X"
         else:
             table[i][-1] = "{:.1f}".format(sum(means) / len(means))
@@ -228,7 +239,7 @@ if __name__ == "__main__":
 
     records = reporting.load_records(args.input_dir)
 
-    done_count, err_count, total_count = count_done_err(args.input_dir)
+    done_count, err_count, incomplete_count, total_count = count_done_err(args.input_dir)
 
     if args.latex:
         print("\\documentclass{article}")
@@ -237,10 +248,10 @@ if __name__ == "__main__":
         print("\\begin{document}")
         print("\\section{Full DomainBed results}")
         # print("% Total records:", len(records))
-        print(f"% Done: {done_count}, Err: {err_count}, Total: {total_count}")
+        print(f"% Done: {done_count}, Err: {err_count}, Incomplete: {incomplete_count}, Total: {total_count}")
     else:
         # print("Total records:", len(records))
-        print("Done:", done_count, "Err:", err_count, "Total:", total_count)
+        print("Done:", done_count, "Err:", err_count, "Incomplete:", incomplete_count, "Total:", total_count)
 
     if records and args.dataset is not None:
         grouped_records = reporting.get_grouped_records(records)

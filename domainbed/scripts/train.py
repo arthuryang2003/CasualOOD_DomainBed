@@ -110,7 +110,7 @@ if __name__ == "__main__":
     else:
         raise NotImplementedError
 
-    if args.algorithm == "CasualOODAlgorithm" or args.algorithm == "VITA":
+    if args.algorithm == "VITA":
         args.uda_holdout_fraction = 0.2
 
     # Split each env into an 'in-split' and an 'out-split'. We'll train on
@@ -238,7 +238,7 @@ if __name__ == "__main__":
 
     steps_per_epoch = min([len(env) / hparams['batch_size'] for env, _ in in_splits if env is not None])
 
-    if args.steps is None and (args.algorithm == "CasualOODAlgorithm" or args.algorithm == "VITA"):
+    if args.steps is None and (args.algorithm == "VITA"):
         n_steps = (hparams.get('phase1_steps', 0) +
                    hparams.get('phase2_steps', 0) +
                    hparams.get('finetune_steps', 0))
