@@ -279,7 +279,7 @@ if __name__ == "__main__":
             # model_selection.IIDTrainingAccuracyMethod,
             # model_selection.IIDValidationAccuracyMethod
         ]
-    if args.algorithm == "VITA":
+    if args.algorithm is None or args.algorithm == "VITA":
         SELECTION_METHODS.append(model_selection.VITAPreFTSelectionMethod)
         SELECTION_METHODS.append(model_selection.VITA_Zu_only_SelectionMethod)
 

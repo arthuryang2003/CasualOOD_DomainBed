@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models
-
+from domainbed import coco_resnet
 from domainbed.lib import wide_resnet
 import copy
 
@@ -484,6 +484,8 @@ def Featurizer(input_shape, hparams):
         return MNIST_CNN(input_shape)
     elif input_shape[1:3] == (32, 32):
         return wide_resnet.Wide_ResNet(input_shape, 16, 2, 0.)
+    elif input_shape[1:3] == (64, 64):
+        return coco_resnet.ResNet8(input_shape, hparams)
     elif input_shape[1:3] == (224, 224):
         if hparams["vit"]:
             if hparams["dinov2"]:

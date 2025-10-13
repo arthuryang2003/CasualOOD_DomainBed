@@ -43,10 +43,13 @@ DATASETS = [
     # "SpawriousM2M_easy",
     # "SpawriousM2M_medium",
     # "SpawriousM2M_hard",
+    "Synthetic",
     'CelebA_Blond',
     "NICOMixed",
     'ColoredMNIST_IRM',
     'ColoredMNISTWithColor',
+    'COCOPlaces',
+
 ]
 
 def get_dataset_class(dataset_name):
@@ -172,6 +175,49 @@ class Debug224(Debug):
 
 
 
+class Synthetic(MultipleDomainDataset):
+    """
+    Anti-causal synthetic dataset with invariant (Xu) and environment-dependent (Xs) features.
+
+        Y ~ Bern(0.5)
+        Xu = (2Y-1) * (2*Bern(0.75)-1)        # invariant feature
+        Xs = (2Y-1) * (2*Bern(beta_e)-1)      # environment-dependent feature
+        X  = [Xu, Xs]
+        label = Y in {0,1}
+    """
+
+    ENVIRONMENTS = ['beta0.9', 'beta0.8', 'beta0.1']
+    INPUT_SHAPE = (2,)
+
+    def __init__(self, root, test_envs, hparams):
+        super().__init__()
+        self.input_shape = self.INPUT_SHAPE
+        self.num_classes = 2
+
+        n_samples = int(hparams.get('n_samples', 10000))
+        beta_values = [0.9, 0.8, 0.1]  # 三个环境
+
+        def bern(p, size):
+            return torch.bernoulli(torch.full(size, float(p)))
+
+        self.datasets = []
+        for beta in beta_values:
+            # y in {0,1}
+            y = bern(0.5, (n_samples, 1))
+
+            # 不变特征 Xu
+            factor_u = bern(0.75, (n_samples, 1))
+            Xu = (2 * y - 1) * (2 * factor_u - 1)
+
+            # 环境相关特征 Xs
+            factor_s = bern(beta, (n_samples, 1))
+            Xs = (2 * y - 1) * (2 * factor_s - 1)
+
+            # 拼接输入
+            x = torch.cat([Xu, Xs], dim=1).float()
+            labels = y.view(-1).long()
+
+            self.datasets.append(TensorDataset(x, labels))
 
 class ColoredMNIST_IRM(MultipleDomainDataset):
     CHECKPOINT_FREQ = 500
@@ -991,3 +1037,52 @@ class SpawriousM2M_hard(SpawriousBenchmark):
         test = ["snow","beach","dirt","jungle"]
         combinations = self.build_type2_combination(group,test)
         super().__init__(combinations['train_combinations'], combinations['test_combinations'], root_dir, hparams['data_augmentation'])
+
+
+class MultipleCocoImageFolder(MultipleDomainDataset):
+    def __init__(self, root, test_envs, augment, hparams):
+        super().__init__()
+        environments = [f.name for f in os.scandir(root) if f.is_dir()]
+        if 'data_256' in environments:
+            environments.remove('data_256')
+
+        if 'env_test' not in environments[-1]:
+            environments.append('env_test')
+            environments.remove('env_test')
+        assert 'env_test' == environments[-1]
+
+        transform = get_transform(input_size=64)
+        augment_scheme = hparams.get('data_augmentation_scheme', 'default')
+        augment_transform = get_augment_transform(augment_scheme, input_size=64)
+
+        self.datasets = []
+        for i, environment in enumerate(environments):
+            if augment and (i not in test_envs):
+                env_transform = augment_transform
+            else:
+                env_transform = transform
+
+            path = os.path.join(root, environment)
+            env_dataset = ImageFolder(path, transform=env_transform)
+            self.datasets.append(env_dataset)
+
+        self.input_shape = (3, 64, 64)
+        self.num_classes = len(self.datasets[-1].classes)
+
+
+class ColoredCOCO(MultipleCocoImageFolder):
+    CHECKPOINT_FREQ = 100
+    ENVIRONMENTS = ['train1', 'train2', 'test']
+
+    def __init__(self, root, test_envs, hparams):
+        self.dir = os.path.join(root, 'ColoredCOCO/')
+        super().__init__(self.dir, test_envs, hparams['data_augmentation'], hparams)
+
+
+class COCOPlaces(MultipleCocoImageFolder):
+    CHECKPOINT_FREQ = 100
+    ENVIRONMENTS = ['train1', 'train2', 'test']
+
+    def __init__(self, root, test_envs, hparams):
+        self.dir = os.path.join(root, 'COCOPlaces/')
+        super().__init__(self.dir, test_envs, hparams['data_augmentation'], hparams)
