@@ -3205,220 +3205,554 @@ class VITA_Zu_only(IRM):
 #
 #
 # VITA IRM
-class VITA(VITA_Zu_only):
+# class VITA(VITA_Zu_only):
+#     def __init__(self, input_shape, num_classes, num_domains, hparams):
+#         super(VITA, self).__init__(input_shape, num_classes, num_domains, hparams)
+#
+#         # Extra modules
+#         self.mask = nn.Parameter(torch.ones(self.z_dim))
+#         self.classifier_tilde_s = networks.Classifier(self.z_dim, num_classes, is_nonlinear=True)
+#
+#         # Phases
+#         self.phase1_steps = hparams.get('phase1_steps', 0)
+#         self.phase2_steps = hparams.get('phase2_steps', 0)
+#         self.finetune_steps = hparams.get('finetune_steps', 0)
+#
+#
+#         self.update_steps = 0
+#
+#         # Trainable reweighting module combining u_logits and tilde_s_logits
+#         concat_dim = self.z_dim * 2
+#         self.reweighting = nn.Sequential(
+#             nn.Linear(concat_dim, self.z_dim),
+#             nn.ReLU(),
+#             nn.Linear(self.z_dim, 2),
+#             nn.Softmax(dim=1)
+#         )
+#
+#         # 默认进入 phase 1
+#         self.set_phase(1)
+#
+#     def encode(self, x):
+#         f = self.featurizer(x)
+#         z_u = self.projection_phi(f)
+#         z_s = self.projection_psi(f)
+#         tilde_z_s = torch.sigmoid(self.mask) * z_s
+#
+#         u_logits = self.classifier_u(z_u)
+#         s_logits = self.classifier_tilde_s(z_s)
+#         tilde_s_logits = self.classifier_tilde_s(tilde_z_s)
+#
+#         concat_z = torch.cat([z_u, tilde_z_s], dim=1)
+#         weights = self.reweighting(concat_z)  # (batch_size, 2)
+#
+#         combined_logits = (
+#             weights[:, 0:1] * u_logits
+#             + weights[:, 1:2] * tilde_s_logits
+#         )
+#
+#         return z_u, z_s, u_logits, s_logits, tilde_s_logits, combined_logits
+#
+#     def update(self, minibatches, unlabeled=None):
+#         self.update_steps += 1
+#
+#         # 阶段切换
+#         if self.update_steps <= self.phase1_steps:
+#             if self.phase != 1:
+#                 self.set_phase(1)
+#         elif self.update_steps <= self.phase1_steps + self.phase2_steps:
+#             if self.phase != 2:
+#                 self.set_phase(2)
+#         else:
+#             if self.phase not in (3, "finetune"):
+#                 self.set_phase("finetune")
+#
+#         # 取数据
+#         if self.phase in (3, "finetune") and unlabeled is not None:
+#             all_x = torch.cat(unlabeled)
+#             all_y = None
+#             domain_labels = None
+#         else:
+#             all_x = torch.cat([x for x, _ in minibatches])
+#             all_y = torch.cat([y for _, y in minibatches])
+#             if self.phase == 1:
+#                 domain_labels = torch.cat([
+#                     torch.full((x.size(0),), i, dtype=torch.long, device=all_x.device)
+#                     for i, (x, _) in enumerate(minibatches)
+#                 ])
+#
+#         z_u, z_s, u_logits, s_logits, tilde_s_logits, combined_logits = self.encode(all_x)
+#
+#         if self.phase == 1:
+#             # 分类损失（不变特征）
+#             loss_cls = F.cross_entropy(u_logits, all_y)
+#
+#             # IRM penalty（按域）
+#             penalty = 0.0
+#             for d in domain_labels.unique():
+#                 logits_d = u_logits[domain_labels == d]
+#                 y_d = all_y[domain_labels == d]
+#                 penalty += self._irm_penalty(logits_d, y_d)
+#             penalty /= len(minibatches)
+#
+#             # 退火权重
+#             penalty_weight = (self.hparams['irm_lambda']
+#                               if self.update_count >= self.hparams['irm_penalty_anneal_iters']
+#                               else 1.0)
+#
+#             # 域判别 + 条件MI
+#             dom_logits = self.domain_classifier(z_s)
+#             loss_dom = F.cross_entropy(dom_logits, domain_labels)
+#             loss_mi = self.compute_conditional_MI(z_u, z_s, all_y)
+#
+#             loss = (loss_cls
+#                     + penalty_weight * penalty
+#                     + self.hparams.get('mi_lambda', 0.) * loss_mi
+#                     + self.hparams.get('domain_lambda', 0.) * loss_dom)
+#
+#             # 在到达退火阈值那一次切换优化器（IRM习惯做法）
+#             if self.update_count == self.hparams['irm_penalty_anneal_iters']:
+#                 self.optimizer = torch.optim.Adam(
+#                     list(self.featurizer.parameters())
+#                     + list(self.projection_phi.parameters())
+#                     + list(self.projection_psi.parameters())
+#                     + list(self.classifier_u.parameters())
+#                     + list(self.domain_classifier.parameters()),
+#                     lr=self.hparams["lr"],
+#                     weight_decay=self.hparams["weight_decay"],
+#                 )
+#
+#             self.optimizer.zero_grad()
+#             loss.backward()
+#             self.optimizer.step()
+#
+#             # 仅在 phase1 计数 IRM 步数
+#             self.update_count += 1
+#
+#             return {
+#                 'loss_total': loss.item(),
+#                 'loss_cls': loss_cls.item(),
+#                 'loss_irm': penalty.item(),
+#                 'loss_dom': loss_dom.item(),
+#                 'loss_mi': loss_mi.item()
+#             }
+#
+#         elif self.phase == 2:
+#             # supervised train mask + s_head
+#             loss_s=F.cross_entropy(tilde_s_logits, all_y)
+#             loss_cls=F.cross_entropy(combined_logits, all_y)
+#             loss = loss_s+loss_cls
+#
+#             self.optimizer.zero_grad()
+#             loss.backward()
+#             self.optimizer.step()
+#
+#             return {
+#                 'loss_total': loss.item(),
+#                 'loss_cls': loss_cls.item(),
+#                 'loss_s': loss_s.item()
+#             }
+#
+#         else:  # finetune: pseudo-labels from u_head
+#             pseudo_labels = u_logits.detach().softmax(1).argmax(1)
+#             loss_s = F.cross_entropy(tilde_s_logits, pseudo_labels)
+#
+#             loss = loss_s
+#
+#             self.optimizer.zero_grad()
+#             loss.backward()
+#             self.optimizer.step()
+#
+#             return {
+#                 'loss_total': loss.item()
+#             }
+#
+#     def predict(self, x):
+#         _, _, u_logits, _, _, combined_logits = self.encode(x)
+#         if self.phase == 1:
+#             return u_logits
+#         else:
+#             return combined_logits
+#
+#     def set_phase(self, phase):
+#         """Create optimizer for each phase (color head instead of domain head)."""
+#         self.phase = phase
+#         if phase == 1:
+#             # Train: featurizer + phi/psi + u_head + color_head
+#             self.optimizer = torch.optim.Adam(
+#                 list(self.featurizer.parameters())
+#                 + list(self.projection_phi.parameters())
+#                 + list(self.projection_psi.parameters())
+#                 + list(self.classifier_u.parameters())
+#                 + list(self.domain_classifier.parameters()),
+#                 lr=self.hparams["lr"],
+#                 weight_decay=self.hparams["weight_decay"]
+#             )
+#         elif phase == 2:
+#             # Train: s_head + mask
+#             self.optimizer = torch.optim.Adam(
+#                 list(self.classifier_tilde_s.parameters())
+#                 + list(self.reweighting.parameters())
+#                 + [self.mask],
+#                 lr=self.hparams["lr"],
+#                 weight_decay=self.hparams["weight_decay"],
+#             )
+#             self.freeze_bn()
+#         elif phase == 3 or phase == "finetune":
+#             # Finetune: s_head + mask
+#             self.optimizer = torch.optim.Adam(
+#                 list(self.classifier_tilde_s.parameters())
+#                 + [self.mask],
+#                 lr=self.hparams["lr"],
+#                 weight_decay=self.hparams["weight_decay"],
+#             )
+#             self.freeze_bn()
+#         else:
+#             raise ValueError("Unsupported phase: must be 1, 2, or 'finetune'")
+#     def freeze_bn(self):
+#         """Freeze BatchNorm statistics for modules contributing to ``u_logits``."""
+#         u_related = set(chain(
+#             self.featurizer.modules(),
+#             self.projection_phi.modules(),
+#             self.classifier_u.modules()
+#         ))
+#         for m in self.modules():
+#             if m in u_related and isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d)):
+#                 m.eval()
+#                 m.track_running_stats = False
+#
+#
+
+
+
+class VITA(Algorithm):
+    """
+    Two-phase version (train / finetune):
+
+    Training loss:
+        L = (1 - γ)*CE(u_logits, y) + γ*CE(combined_logits, y)
+            + λ_mmd * MMD(z_u across domains, Gaussian kernel)
+            + λ_grad * GradientPenalty(tilde_s_logits per-domain)
+            + λ_mi * ConditionalIndependence(u_logits, s_logits | y)
+
+    Finetune loss (UDA):
+        L = CE(tilde_s_logits, pseudo_labels_from_u_logits)
+        Only updates classifier_tilde_s and mask; all other modules frozen.
+    """
+
     def __init__(self, input_shape, num_classes, num_domains, hparams):
         super(VITA, self).__init__(input_shape, num_classes, num_domains, hparams)
 
-        # Extra modules
-        self.mask = nn.Parameter(torch.ones(self.z_dim))
+        self.num_classes = num_classes
+        self.num_domains = num_domains
+        self.hparams = hparams
+
+        # ------- Backbone and projections -------
+        self.featurizer = networks.Featurizer(input_shape, hparams)
+        self.z_dim = self.featurizer.n_outputs
+        self.projection_phi = nn.Linear(self.z_dim, self.z_dim)  # z_u
+        self.projection_psi = nn.Linear(self.z_dim, self.z_dim)  # z_s
+
+        # ------- Classifiers -------
+        self.classifier_u = networks.Classifier(self.z_dim, num_classes, is_nonlinear=True)
         self.classifier_tilde_s = networks.Classifier(self.z_dim, num_classes, is_nonlinear=True)
 
-        # Phases
-        self.phase1_steps = hparams.get('phase1_steps', 0)
-        self.phase2_steps = hparams.get('phase2_steps', 0)
-        self.finetune_steps = hparams.get('finetune_steps', 0)
+        # Learnable mask for style feature modulation
+        self.mask = nn.Parameter(torch.ones(self.z_dim))
 
-
-        self.update_steps = 0
-
-        # Trainable reweighting module combining u_logits and tilde_s_logits
-        concat_dim = self.z_dim * 2
+        # Learnable weighting module for combining u_logits and tilde_s_logits
         self.reweighting = nn.Sequential(
-            nn.Linear(concat_dim, self.z_dim),
+            nn.Linear(self.z_dim * 2, self.z_dim),
             nn.ReLU(),
             nn.Linear(self.z_dim, 2),
             nn.Softmax(dim=1)
         )
 
-        # 默认进入 phase 1
-        self.set_phase(1)
+        # ------- Hyperparameters -------
+        self.gamma = float(self.hparams.get("gamma", 0.5))           # CE combination weight
+        self.mmd_gamma = float(self.hparams.get("mmd_gamma", 1.0))   # MMD coefficient
+        self.grad_lambda = float(self.hparams.get("grad_lambda", 1.0))  # Gradient penalty coeff
+        self.mi_lambda = float(self.hparams.get("mi_lambda", 0.1))   # MI penalty coeff
+        self.kernel_gammas = self.hparams.get(
+            "gaussian_gammas", [0.001, 0.01, 0.1, 1, 10, 100, 1000]
+        )
 
+        # Default: train phase
+        self.set_phase("train")
+
+        self.train_steps = int(self.hparams.get('train_steps', 5001))
+        self.update_steps = 0
+
+    # ================= PHASE CONTROL =================
+    def set_phase(self, phase: str):
+        """Switch between 'train' and 'finetune' phases."""
+        assert phase in ("train", "finetune"), "phase must be 'train' or 'finetune'"
+        self.phase = phase
+
+        if phase == "train":
+            # Train all modules
+            for p in self.parameters():
+                p.requires_grad = True
+
+            params = (
+                list(self.featurizer.parameters())
+                + list(self.projection_phi.parameters())
+                + list(self.projection_psi.parameters())
+                + list(self.classifier_u.parameters())
+                + list(self.classifier_tilde_s.parameters())
+                + list(self.reweighting.parameters())
+                + [self.mask]
+            )
+
+            self.optimizer = torch.optim.Adam(
+                params, lr=self.hparams["lr"], weight_decay=self.hparams["weight_decay"]
+            )
+            self._unfreeze_bn()
+
+        else:  # finetune
+            # Freeze all modules except classifier_tilde_s and mask
+            for p in self.parameters():
+                p.requires_grad = False
+            for p in self.classifier_tilde_s.parameters():
+                p.requires_grad = True
+            self.mask.requires_grad = True
+
+            self.optimizer = torch.optim.Adam(
+                list(self.classifier_tilde_s.parameters()) + [self.mask],
+                lr=self.hparams.get("finetune_lr", self.hparams["lr"]),
+                weight_decay=self.hparams["weight_decay"],
+            )
+            self._freeze_bn()
+
+    def _freeze_bn(self):
+        """Freeze BatchNorm stats (used during finetune)."""
+        for m in self.modules():
+            if isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d)):
+                m.eval()
+                m.track_running_stats = False
+
+    def _unfreeze_bn(self):
+        """Unfreeze BatchNorm stats (used during training)."""
+        for m in self.modules():
+            if isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d)):
+                m.train()
+                m.track_running_stats = True
+
+    # ================= FORWARD =================
     def encode(self, x):
+        """Forward pass through all modules and return key representations."""
         f = self.featurizer(x)
         z_u = self.projection_phi(f)
         z_s = self.projection_psi(f)
         tilde_z_s = torch.sigmoid(self.mask) * z_s
 
         u_logits = self.classifier_u(z_u)
-        s_logits = self.classifier_tilde_s(z_s)
+        s_logits = self.classifier_tilde_s(z_s)  # for MI
         tilde_s_logits = self.classifier_tilde_s(tilde_z_s)
 
+        # Combine predictions
         concat_z = torch.cat([z_u, tilde_z_s], dim=1)
-        weights = self.reweighting(concat_z)  # (batch_size, 2)
+        weights = self.reweighting(concat_z)  # (B,2)
+        combined_logits = weights[:, 0:1] * u_logits + weights[:, 1:2] * tilde_s_logits
+        return z_u, z_s, tilde_z_s, u_logits, s_logits, tilde_s_logits, combined_logits
 
-        combined_logits = (
-            weights[:, 0:1] * u_logits
-            + weights[:, 1:2] * tilde_s_logits
-        )
-
-        return z_u, z_s, u_logits, s_logits, tilde_s_logits, combined_logits
-
-    def update(self, minibatches, unlabeled=None):
+    # ================= UPDATE =================
+    def update(self, minibatches=None, uda_loader=None):
+        """
+        - Train phase: pass labeled minibatches=[(x_i, y_i), ...]
+        - Finetune phase: pass unlabeled uda_loader
+        """
+        # Increment global step counter
         self.update_steps += 1
 
-        # 阶段切换
-        if self.update_steps <= self.phase1_steps:
-            if self.phase != 1:
-                self.set_phase(1)
-        elif self.update_steps <= self.phase1_steps + self.phase2_steps:
-            if self.phase != 2:
-                self.set_phase(2)
+        # Phase switching by step count
+        if self.update_steps <= self.train_steps:
+            # Ensure current phase is 'train'
+            if self.phase != 'train':
+                self.set_phase('train')
+            assert minibatches is not None and len(minibatches) > 0, \
+                "Train phase requires labeled minibatches."
+            return self._train_step(minibatches)
         else:
-            if self.phase not in (3, "finetune"):
-                self.set_phase("finetune")
+            # Switch to finetune
+            if self.phase != 'finetune':
+                self.set_phase('finetune')
+            assert uda_loader is not None, \
+                "Finetune phase requires UDA loader (unlabeled data)."
+            return self._finetune_step(uda_loader)
 
-        # 取数据
-        if self.phase in (3, "finetune") and unlabeled is not None:
-            all_x = torch.cat(unlabeled)
-            all_y = None
-            domain_labels = None
-        else:
-            all_x = torch.cat([x for x, _ in minibatches])
-            all_y = torch.cat([y for _, y in minibatches])
-            if self.phase == 1:
-                domain_labels = torch.cat([
-                    torch.full((x.size(0),), i, dtype=torch.long, device=all_x.device)
-                    for i, (x, _) in enumerate(minibatches)
-                ])
 
-        z_u, z_s, u_logits, s_logits, tilde_s_logits, combined_logits = self.encode(all_x)
+    # -------- TRAIN STEP --------
+    def _train_step(self, minibatches):
+        """Full supervised training step."""
+        all_x = torch.cat([x for x, _ in minibatches], dim=0)
+        all_y = torch.cat([y for _, y in minibatches], dim=0)
+        device = all_x.device
 
-        if self.phase == 1:
-            # 分类损失（不变特征）
-            loss_cls = F.cross_entropy(u_logits, all_y)
+        domain_labels = torch.cat(
+            [torch.full((x.size(0),), i, dtype=torch.long, device=device)
+             for i, (x, _) in enumerate(minibatches)]
+        )
 
-            # IRM penalty（按域）
-            penalty = 0.0
-            for d in domain_labels.unique():
-                logits_d = u_logits[domain_labels == d]
-                y_d = all_y[domain_labels == d]
-                penalty += self._irm_penalty(logits_d, y_d)
-            penalty /= len(minibatches)
+        z_u, z_s, tilde_z_s, u_logits, s_logits, tilde_s_logits, combined_logits = self.encode(all_x)
 
-            # 退火权重
-            penalty_weight = (self.hparams['irm_lambda']
-                              if self.update_count >= self.hparams['irm_penalty_anneal_iters']
-                              else 1.0)
+        # (1) Cross entropy: both u_logits and combined_logits
+        loss_ce_u = F.cross_entropy(u_logits, all_y)
+        loss_ce_comb = F.cross_entropy(combined_logits, all_y)
+        loss_ce = (1.0 - self.gamma) * loss_ce_u + self.gamma * loss_ce_comb
 
-            # 域判别 + 条件MI
-            dom_logits = self.domain_classifier(z_s)
-            loss_dom = F.cross_entropy(dom_logits, domain_labels)
-            loss_mi = self.compute_conditional_MI(z_u, z_s, all_y)
+        # (2) MMD across domains (z_u)
+        loss_mmd = self._mmd_multi_domains(z_u, domain_labels)
 
-            loss = (loss_cls
-                    + penalty_weight * penalty
-                    + self.hparams.get('mi_lambda', 0.) * loss_mi
-                    + self.hparams.get('domain_lambda', 0.) * loss_dom)
+        # (3) Gradient optimality
+        loss_grad = self._grad_optimality_penalty(tilde_s_logits, all_y, domain_labels)
 
-            # 在到达退火阈值那一次切换优化器（IRM习惯做法）
-            if self.update_count == self.hparams['irm_penalty_anneal_iters']:
-                self.optimizer = torch.optim.Adam(
-                    list(self.featurizer.parameters())
-                    + list(self.projection_phi.parameters())
-                    + list(self.projection_psi.parameters())
-                    + list(self.classifier_u.parameters())
-                    + list(self.domain_classifier.parameters()),
-                    lr=self.hparams["lr"],
-                    weight_decay=self.hparams["weight_decay"],
-                )
+        # (4) Conditional independence (mutual information proxy)
+        with torch.no_grad():
+            u_probs = F.softmax(u_logits, dim=1)
+        s_probs = F.softmax(s_logits, dim=1)
+        loss_mi = self._conditional_independence_reg(u_probs, s_probs, all_y)
 
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
+        loss = loss_ce + self.grad_lambda * loss_grad + self.mi_lambda * loss_mi
 
-            # 仅在 phase1 计数 IRM 步数
-            self.update_count += 1
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
 
-            return {
-                'loss_total': loss.item(),
-                'loss_cls': loss_cls.item(),
-                'loss_irm': penalty.item(),
-                'loss_dom': loss_dom.item(),
-                'loss_mi': loss_mi.item()
-            }
+        return {
+            "loss_total": float(loss.item()),
+            "loss_ce_u": float(loss_ce_u.item()),
+            "loss_ce_comb": float(loss_ce_comb.item()),
+            "loss_mmd": float(loss_mmd.item()),
+            "loss_grad": float(loss_grad.item()),
+            "loss_mi": float(loss_mi.item()),
+        }
 
-        elif self.phase == 2:
-            # supervised train mask + s_head
-            loss_s=F.cross_entropy(tilde_s_logits, all_y)
-            loss_cls=F.cross_entropy(combined_logits, all_y)
-            loss = loss_s+loss_cls
+    # -------- FINETUNE STEP --------
+    @torch.no_grad()
+    def _make_pseudo(self, logits):
+        """Generate pseudo-labels from logits (argmax over softmax)."""
+        return logits.softmax(dim=1).argmax(dim=1)
 
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
+    def _finetune_step(self, uda_loader):
+        """
+        Finetune only classifier_tilde_s and mask on unlabeled data.
+        Uses pseudo-labels generated from u_logits.
+        """
+        self.classifier_tilde_s.train()
+        total_loss = 0.0
+        n_batches = 0
 
-            return {
-                'loss_total': loss.item(),
-                'loss_cls': loss_cls.item(),
-                'loss_s': loss_s.item()
-            }
+        for batch in uda_loader:
+            if isinstance(batch, (list, tuple)):
+                x_u = batch[0]
+            else:
+                x_u = batch
+            x_u = x_u.to(next(self.parameters()).device)
 
-        else:  # finetune: pseudo-labels from u_head
-            pseudo_labels = u_logits.detach().softmax(1).argmax(1)
-            loss_s = F.cross_entropy(tilde_s_logits, pseudo_labels)
-
-            loss = loss_s
+            _, _, _, u_logits, _, tilde_s_logits, _ = self.encode(x_u)
+            pseudo = self._make_pseudo(u_logits)
+            loss = F.cross_entropy(tilde_s_logits, pseudo)
 
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
 
-            return {
-                'loss_total': loss.item()
-            }
+            total_loss += float(loss.item())
+            n_batches += 1
 
+        avg = total_loss / max(n_batches, 1)
+        return { "loss_total": avg}
+
+    # ================= INFERENCE =================
     def predict(self, x):
-        _, _, u_logits, _, _, combined_logits = self.encode(x)
-        if self.phase == 1:
-            return u_logits
-        else:
-            return combined_logits
+        """Return combined logits for inference."""
+        _, _, _, _, _, _, combined_logits = self.encode(x)
+        return combined_logits
 
-    def set_phase(self, phase):
-        """Create optimizer for each phase (color head instead of domain head)."""
-        self.phase = phase
-        if phase == 1:
-            # Train: featurizer + phi/psi + u_head + color_head
-            self.optimizer = torch.optim.Adam(
-                list(self.featurizer.parameters())
-                + list(self.projection_phi.parameters())
-                + list(self.projection_psi.parameters())
-                + list(self.classifier_u.parameters())
-                + list(self.domain_classifier.parameters()),
-                lr=self.hparams["lr"],
-                weight_decay=self.hparams["weight_decay"]
-            )
-        elif phase == 2:
-            # Train: s_head + mask
-            self.optimizer = torch.optim.Adam(
-                list(self.classifier_tilde_s.parameters())
-                + list(self.reweighting.parameters())
-                + [self.mask],
-                lr=self.hparams["lr"],
-                weight_decay=self.hparams["weight_decay"],
-            )
-            self.freeze_bn()
-        elif phase == 3 or phase == "finetune":
-            # Finetune: s_head + mask
-            self.optimizer = torch.optim.Adam(
-                list(self.classifier_tilde_s.parameters())
-                + [self.mask],
-                lr=self.hparams["lr"],
-                weight_decay=self.hparams["weight_decay"],
-            )
-            self.freeze_bn()
-        else:
-            raise ValueError("Unsupported phase: must be 1, 2, or 'finetune'")
-    def freeze_bn(self):
-        """Freeze BatchNorm statistics for modules contributing to ``u_logits``."""
-        u_related = set(chain(
-            self.featurizer.modules(),
-            self.projection_phi.modules(),
-            self.classifier_u.modules()
-        ))
-        for m in self.modules():
-            if m in u_related and isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d)):
-                m.eval()
-                m.track_running_stats = False
+    def predict_u(self, x):
+        """Return combined logits for inference."""
+        _, _, _, u_logits, _, _, _ = self.encode(x)
+        return u_logits
 
+    # ================= MMD UTILITIES =================
+    def _my_cdist(self, x1, x2):
+        """Compute squared Euclidean distance matrix."""
+        x1_norm = x1.pow(2).sum(dim=-1, keepdim=True)
+        x2_norm = x2.pow(2).sum(dim=-1, keepdim=True)
+        res = torch.addmm(x2_norm.transpose(-2, -1), x1, x2.transpose(-2, -1), alpha=-2).add_(x1_norm)
+        return res.clamp_min_(1e-30)
 
+    def _gaussian_kernel(self, x, y):
+        """Multi-bandwidth Gaussian kernel."""
+        D = self._my_cdist(x, y)
+        K = torch.zeros_like(D)
+        for g in self.kernel_gammas:
+            K.add_(torch.exp(-g * D))
+        return K
+
+    def _mmd(self, x, y):
+        """Compute Gaussian MMD between x and y."""
+        Kxx = self._gaussian_kernel(x, x).mean()
+        Kyy = self._gaussian_kernel(y, y).mean()
+        Kxy = self._gaussian_kernel(x, y).mean()
+        return Kxx + Kyy - 2.0 * Kxy
+
+    def _mmd_multi_domains(self, z_u, domain_labels):
+        """Compute average pairwise MMD across all domain pairs."""
+        domains = domain_labels.unique()
+        n = len(domains)
+        if n <= 1:
+            return z_u.new_tensor(0.0)
+        penalty = 0.0
+        cnt = 0
+        for i in range(n):
+            for j in range(i + 1, n):
+                zi = z_u[domain_labels == domains[i]]
+                zj = z_u[domain_labels == domains[j]]
+                if len(zi) > 1 and len(zj) > 1:
+                    penalty += self._mmd(zi, zj)
+                    cnt += 1
+        return penalty / cnt if cnt > 0 else z_u.new_tensor(0.0)
+
+    # ================= GRADIENT OPTIMALITY (ACTIR STYLE) =================
+    def _grad_optimality_penalty(self, tilde_s_logits, y, domain_labels):
+        """
+        Compute ACTIR-style gradient penalty:
+        For each domain, compute CE(tilde_s_logits, y),
+        then compute gradient norm wrt s_head and mask.
+        """
+        params = list(self.classifier_tilde_s.parameters()) + [self.mask]
+        total = 0.0
+        domains = domain_labels.unique()
+        for d in domains:
+            idx = domain_labels == d
+            if idx.sum() < 2:
+                continue
+            logits_d = tilde_s_logits[idx]
+            y_d = y[idx]
+            inner_loss = F.cross_entropy(logits_d, y_d)
+            grads = torch.autograd.grad(inner_loss, params, create_graph=True, retain_graph=True, allow_unused=True)
+            grad_norm_sq = sum((g.pow(2).sum() for g in grads if g is not None))
+            total += grad_norm_sq
+        return total / len(domains) if len(domains) > 0 else tilde_s_logits.new_tensor(0.0)
+
+    # ================= MUTUAL INFORMATION PROXY =================
+    def _conditional_independence_reg(self, A_probs, B_probs, y):
+        """
+        Conditional independence regularizer (MI proxy):
+        reg = || E[ A * (B - E[B|Y]) ] ||_1
+        A = softmax(u_logits), B = softmax(s_logits).
+        """
+        N, C = A_probs.size()
+        device = A_probs.device
+        mu = torch.zeros((C, C), device=device)
+        class_ids = y.unique()
+        for c in class_ids:
+            idx = y == c
+            if idx.any():
+                mu[c] = B_probs[idx].mean(dim=0)
+        mu_y = mu[y]  # per-sample conditional mean
+        centered = B_probs - mu_y
+        est = (A_probs * centered).mean(dim=0)
+        return torch.sum(torch.abs(est))
