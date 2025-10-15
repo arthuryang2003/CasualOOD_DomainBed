@@ -239,8 +239,7 @@ if __name__ == "__main__":
     steps_per_epoch = min([len(env) / hparams['batch_size'] for env, _ in in_splits if env is not None])
 
     if args.steps is None and (args.algorithm == "VITA"):
-        n_steps = (hparams.get('phase1_steps', 0) +
-                   hparams.get('phase2_steps', 0) +
+        n_steps = (hparams.get('train_steps', 0) +
                    hparams.get('finetune_steps', 0))
     else:
         n_steps = args.steps or dataset.N_STEPS
@@ -272,7 +271,7 @@ if __name__ == "__main__":
         else:
             minibatches_device = [(x.to(device), y.to(device), z.to(device))
                 for x, y, z in batch]
-        if args.task == "domain_adaptation" or args.algorithm == "CasualOODAlgorithm" or  args.algorithm == "VITA" :
+        if args.task == "domain_adaptation" or  args.algorithm == "VITA" :
             uda_device = [x.to(device)
                 for x, *_ in next(uda_minibatches_iterator)]
         else:
