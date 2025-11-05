@@ -10,9 +10,9 @@ python3 -m domainbed.scripts.sweep ${command}\
        --data_dir ${data_dir}\
        --command_launcher smart_gpu\
        --fixed_test_envs 2\
-       --n_hparams 20\
-       --n_trials 3\
+       --n_hparams 40\
+       --n_trials 1\
        --skip_confirmation\
        --hparams "$(<sweep/${dataset}/hparams.json)"\
-       --output_dir "sweep/${dataset}/VITA_IRM_test2"
+       --output_dir "sweep/${dataset}/VITA_v2_test7"
 

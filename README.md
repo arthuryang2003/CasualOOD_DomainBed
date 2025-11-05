@@ -131,12 +131,12 @@ sh run
 ```shell
 bash sweep/PACS/run.sh launch ./domainbed/data 2,3,4,5,6,7
 bash sweep/CelebA_Blond/run.sh launch ./domainbed/data 4,5,6,7
-bash sweep/NICOMixed/run.sh launch ./domainbed/data 5,6,7
-bash sweep/ColoredMNIST/run.sh launch ./domainbed/data 4,5,6,7
-bash sweep/ColoredMNIST_IRM/run.sh launch ./domainbed/data 2,3,4,5,6,7
-bash sweep/COCOPlaces/run.sh launch ./domainbed/data 1
-bash sweep/COCOPlaces/run_baseline.sh launch ./domainbed/data 2,3,4,5,6,7
-bash sweep/Synthetic/run.sh launch ./domainbed/data 1
+bash sweep/NICOMixed/run.sh launch ./domainbed/data 6
+bash sweep/ColoredMNIST/run.sh launch ./domainbed/data 4,5,6
+bash sweep/ColoredMNIST_IRM/run.sh launch ./domainbed/data 0,1,2,3
+bash sweep/COCOPlaces/run.sh launch ./domainbed/data 0,1,2,3
+bash sweep/COCOPlaces/run_baseline.sh launch ./domainbed/data 1,6,7
+bash sweep/Synthetic/run.sh launch ./domainbed/data 5,6
 ```
 
 ```shell
@@ -158,8 +158,8 @@ visualize
 ```shell
 python -m domainbed.scripts.visualize_cam \
     --data_dir=./domainbed/data \
-    --input_dir=./sweep/CelebA_Blond/VITA_IRM  \
-    --dataset=CelebA_Blond \
+    --input_dir=./sweep/COCOPlaces/VITA_IRM_Weight  \
+    --dataset=COCOPlaces \
     --algorithm=VITA \
     --test_env=2
 ```
@@ -203,13 +203,13 @@ To view the results of your sweep:
 
 ````sh
 python -m domainbed.scripts.collect_results\
-  --input_dir ./sweep/ColoredMNIST/VITA_IRM_Weight 
+  --input_dir ./sweep/ColoredMNIST/VITA_v2_test3
 ````
 
 List top haparams  of your sweep:
 
 ````sh
-python -m domainbed.scripts.list_top_hparams     --input_dir ./sweep/ColoredMNISTWithColor/VITA_0.0_v2    --dataset=ColoredMNISTWithColor --algorithm=VITA --test_env=2
+python -m domainbed.scripts.list_top_hparams     --input_dir ./sweep/ColoredMNIST_IRM/VITA_v2_test5   --dataset=ColoredMNIST_IRM --algorithm=VITA --test_env=2
 
 ````
 

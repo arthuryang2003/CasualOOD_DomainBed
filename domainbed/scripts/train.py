@@ -239,7 +239,8 @@ if __name__ == "__main__":
     steps_per_epoch = min([len(env) / hparams['batch_size'] for env, _ in in_splits if env is not None])
 
     if args.steps is None and (args.algorithm == "VITA"):
-        n_steps = (hparams.get('train_steps', 0) +
+        n_steps = (hparams.get('phase1_steps', 0)+
+                   hparams.get('phase2_steps', 0)+
                    hparams.get('finetune_steps', 0))
     else:
         n_steps = args.steps or dataset.N_STEPS

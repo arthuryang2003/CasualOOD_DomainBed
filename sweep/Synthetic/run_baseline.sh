@@ -1,4 +1,4 @@
-dataset=COCOPlaces
+dataset=Synthetic
 command=$1
 data_dir=$2
 gpu_id=$3

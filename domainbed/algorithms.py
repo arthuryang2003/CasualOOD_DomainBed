@@ -3421,23 +3421,26 @@ class VITA_Zu_only(IRM):
 #                 m.eval()
 #                 m.track_running_stats = False
 #
-#
+
+
 
 
 
 class VITA(Algorithm):
     """
-    Two-phase version (train / finetune):
+    Three-phase pipeline:
+      - Phase 1 (train1, ACTIR-style disentanglement):
+          loss_ce = (1 - gamma)*CE(u_logits, y) + gamma*CE(combined_logits, y)
+          loss_grad = ACTIR-like gradient penalty computed on inner_loss = CE(tilde_s_logits, y) + mi_lambda * MI(u, s | y)
+          total = loss_ce + grad_lambda * loss_grad
 
-    Training loss:
-        L = (1 - γ)*CE(u_logits, y) + γ*CE(combined_logits, y)
-            + λ_mmd * MMD(z_u across domains, Gaussian kernel)
-            + λ_grad * GradientPenalty(tilde_s_logits per-domain)
-            + λ_mi * ConditionalIndependence(u_logits, s_logits | y)
+      - Phase 2 (train2, supervised finetuning of style branch only):
+          Update only classifier_tilde_s and mask with real labels:
+          total = CE(tilde_s_logits, y)
 
-    Finetune loss (UDA):
-        L = CE(tilde_s_logits, pseudo_labels_from_u_logits)
-        Only updates classifier_tilde_s and mask; all other modules frozen.
+      - Phase 3 (finetune, UDA — unchanged from your original):
+          Update only classifier_tilde_s and mask with pseudo labels from u_logits:
+          total = CE(tilde_s_logits, pseudo(u_logits))
     """
 
     def __init__(self, input_shape, num_classes, num_domains, hparams):
@@ -3447,20 +3450,21 @@ class VITA(Algorithm):
         self.num_domains = num_domains
         self.hparams = hparams
 
-        # ------- Backbone and projections -------
+        # ---------- Backbone & projections ----------
         self.featurizer = networks.Featurizer(input_shape, hparams)
         self.z_dim = self.featurizer.n_outputs
-        self.projection_phi = nn.Linear(self.z_dim, self.z_dim)  # z_u
-        self.projection_psi = nn.Linear(self.z_dim, self.z_dim)  # z_s
+        self.projection_phi = nn.Linear(self.z_dim, self.z_dim)  # z_u  (invariant)
+        self.projection_psi = nn.Linear(self.z_dim, self.z_dim)  # z_s  (variant)
 
-        # ------- Classifiers -------
-        self.classifier_u = networks.Classifier(self.z_dim, num_classes, is_nonlinear=True)
-        self.classifier_tilde_s = networks.Classifier(self.z_dim, num_classes, is_nonlinear=True)
+        # ---------- Heads ----------
+        self.classifier_u = networks.Classifier(self.z_dim, num_classes, is_nonlinear=True)       # f_beta
+        self.classifier_tilde_s = networks.Classifier(self.z_dim, num_classes, is_nonlinear=True) # f_eta
+        self.classifier_combined = networks.Classifier(self.z_dim*2, num_classes, is_nonlinear=True) # f_eta
 
-        # Learnable mask for style feature modulation
+        # Mask to modulate style feature (element-wise)
         self.mask = nn.Parameter(torch.ones(self.z_dim))
 
-        # Learnable weighting module for combining u_logits and tilde_s_logits
+        # Reweighting module to merge u_logits and tilde_s_logits
         self.reweighting = nn.Sequential(
             nn.Linear(self.z_dim * 2, self.z_dim),
             nn.ReLU(),
@@ -3468,32 +3472,36 @@ class VITA(Algorithm):
             nn.Softmax(dim=1)
         )
 
-        # ------- Hyperparameters -------
-        self.gamma = float(self.hparams.get("gamma", 0.5))           # CE combination weight
-        self.mmd_gamma = float(self.hparams.get("mmd_gamma", 1.0))   # MMD coefficient
-        self.grad_lambda = float(self.hparams.get("grad_lambda", 1.0))  # Gradient penalty coeff
-        self.mi_lambda = float(self.hparams.get("mi_lambda", 0.1))   # MI penalty coeff
+        # ---------- Hyper-parameters ----------
+        self.gamma = float(self.hparams.get("gamma", 0.5))          # CE mixing weight
+        self.mmd_lambda = float(self.hparams.get("mmd_lambda", 1.0))
+        self.grad_lambda = float(self.hparams.get("grad_lambda", 1.0))  # gradient penalty coeff
+        self.mi_lambda = float(self.hparams.get("mi_lambda", 1.0))  # weight inside constraint (not outer loss)
         self.kernel_gammas = self.hparams.get(
             "gaussian_gammas", [0.001, 0.01, 0.1, 1, 10, 100, 1000]
         )
-
-        # Default: train phase
-        self.set_phase("train")
-
-        self.train_steps = int(self.hparams.get('train_steps', 5001))
+        # Phase schedule (numbers of update steps for phase1 and phase2; after that go UDA finetune)
+        self.phase1_steps = int(self.hparams.get("phase1_steps", 5001))
+        self.phase2_steps = int(self.hparams.get("phase2_steps", 1000))
         self.update_steps = 0
 
-    # ================= PHASE CONTROL =================
+        # Default to phase1
+        self.set_phase("train1")
+
+    # ===================== PHASE CONTROL =====================
     def set_phase(self, phase: str):
-        """Switch between 'train' and 'finetune' phases."""
-        assert phase in ("train", "finetune"), "phase must be 'train' or 'finetune'"
+        """
+        Switch among: 'train1' (ACTIR-style), 'train2' (supervised tilde_s finetune), 'finetune' (UDA).
+        Sets requires_grad and (re)creates the optimizer accordingly.
+        """
+        assert phase in ("train1", "train2", "finetune"), "phase must be 'train1' | 'train2' | 'finetune'"
         self.phase = phase
 
-        if phase == "train":
+        # Freeze/unfreeze by phase
+        if phase == "train1":
             # Train all modules
             for p in self.parameters():
                 p.requires_grad = True
-
             params = (
                 list(self.featurizer.parameters())
                 + list(self.projection_phi.parameters())
@@ -3501,16 +3509,29 @@ class VITA(Algorithm):
                 + list(self.classifier_u.parameters())
                 + list(self.classifier_tilde_s.parameters())
                 + list(self.reweighting.parameters())
-                + [self.mask]
+                # + list(self.classifier_combined.parameters())
             )
-
             self.optimizer = torch.optim.Adam(
                 params, lr=self.hparams["lr"], weight_decay=self.hparams["weight_decay"]
             )
             self._unfreeze_bn()
 
-        else:  # finetune
-            # Freeze all modules except classifier_tilde_s and mask
+        elif phase == "train2":
+            # Only the style branch is trainable (classifier_tilde_s + mask)
+            for p in self.parameters():
+                p.requires_grad = False
+            for p in self.classifier_tilde_s.parameters():
+                p.requires_grad = True
+            self.mask.requires_grad = True
+
+            self.optimizer = torch.optim.Adam(
+                list(self.classifier_tilde_s.parameters()) + [self.mask] + list(self.reweighting.parameters()),
+                lr=self.hparams.get("phase2_lr", self.hparams["lr"]),
+                weight_decay=self.hparams["weight_decay"],
+            )
+            self._freeze_bn()
+
+        else:  # 'finetune' (UDA)
             for p in self.parameters():
                 p.requires_grad = False
             for p in self.classifier_tilde_s.parameters():
@@ -3525,70 +3546,83 @@ class VITA(Algorithm):
             self._freeze_bn()
 
     def _freeze_bn(self):
-        """Freeze BatchNorm stats (used during finetune)."""
+        """Freeze BatchNorm stats (for train2/finetune)."""
         for m in self.modules():
             if isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d)):
                 m.eval()
                 m.track_running_stats = False
 
     def _unfreeze_bn(self):
-        """Unfreeze BatchNorm stats (used during training)."""
+        """Unfreeze BatchNorm stats (for train1)."""
         for m in self.modules():
             if isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d)):
                 m.train()
                 m.track_running_stats = True
 
-    # ================= FORWARD =================
+    # ===================== FORWARD BLOCKS =====================
     def encode(self, x):
-        """Forward pass through all modules and return key representations."""
+        """
+        Forward through featurizer and heads. Returns:
+          z_u, z_s, tilde_z_s, u_logits, s_logits, tilde_s_logits, combined_logits
+        """
         f = self.featurizer(x)
         z_u = self.projection_phi(f)
         z_s = self.projection_psi(f)
         tilde_z_s = torch.sigmoid(self.mask) * z_s
 
         u_logits = self.classifier_u(z_u)
-        s_logits = self.classifier_tilde_s(z_s)  # for MI
+        s_logits = self.classifier_tilde_s(z_s)           # used for MI proxy
         tilde_s_logits = self.classifier_tilde_s(tilde_z_s)
 
-        # Combine predictions
+        # Weighted fusion
         concat_z = torch.cat([z_u, tilde_z_s], dim=1)
         weights = self.reweighting(concat_z)  # (B,2)
         combined_logits = weights[:, 0:1] * u_logits + weights[:, 1:2] * tilde_s_logits
+        # combined_logits=self.classifier_combined(concat_z)
+
         return z_u, z_s, tilde_z_s, u_logits, s_logits, tilde_s_logits, combined_logits
 
-    # ================= UPDATE =================
+    # ===================== UPDATE STEP =====================
     def update(self, minibatches=None, uda_loader=None):
         """
-        - Train phase: pass labeled minibatches=[(x_i, y_i), ...]
-        - Finetune phase: pass unlabeled uda_loader
+        Dispatcher across phases:
+          - Phase 1/2 require labeled minibatches=[(x_i, y_i), ...]
+          - Finetune (UDA) requires uda_loader (unlabeled iterator)
         """
-        # Increment global step counter
         self.update_steps += 1
 
-        # Phase switching by step count
-        if self.update_steps <= self.train_steps:
-            # Ensure current phase is 'train'
-            if self.phase != 'train':
-                self.set_phase('train')
-            assert minibatches is not None and len(minibatches) > 0, \
-                "Train phase requires labeled minibatches."
-            return self._train_step(minibatches)
+        if self.update_steps <= self.phase1_steps:
+            if self.phase != "train1":
+                self.set_phase("train1")
+            assert minibatches is not None and len(minibatches) > 0, "Phase1 requires labeled minibatches."
+            return self._train1_step(minibatches)
+
+        elif self.update_steps <= (self.phase1_steps + self.phase2_steps):
+            if self.phase != "train2":
+                self.set_phase("train2")
+            assert minibatches is not None and len(minibatches) > 0, "Phase2 requires labeled minibatches."
+            return self._train2_step(minibatches)
+
         else:
-            # Switch to finetune
-            if self.phase != 'finetune':
-                self.set_phase('finetune')
-            assert uda_loader is not None, \
-                "Finetune phase requires UDA loader (unlabeled data)."
+            if self.phase != "finetune":
+                self.set_phase("finetune")
+            assert uda_loader is not None, "Finetune phase requires UDA loader (unlabeled)."
             return self._finetune_step(uda_loader)
 
-
-    # -------- TRAIN STEP --------
-    def _train_step(self, minibatches):
-        """Full supervised training step."""
+    # ----------------- Phase 1: Decoupler training -----------------
+    def _train1_step(self, minibatches):
+        """
+        Phase 1 objective:
+          loss_ce = (1 - gamma)*CE(u_logits, y) + gamma*CE(combined_logits, y)
+          loss_grad = ACTIR-like per-domain gradient norm of inner_loss,
+                      inner_loss = CE(tilde_s_logits, y) + mi_lambda * MI_proxy(u, s | y)
+          total = loss_ce + grad_lambda * loss_grad
+        """
         all_x = torch.cat([x for x, _ in minibatches], dim=0)
         all_y = torch.cat([y for _, y in minibatches], dim=0)
         device = all_x.device
 
+        # domain labels [0..num_domains-1], repeated by minibatch origin
         domain_labels = torch.cat(
             [torch.full((x.size(0),), i, dtype=torch.long, device=device)
              for i, (x, _) in enumerate(minibatches)]
@@ -3596,24 +3630,63 @@ class VITA(Algorithm):
 
         z_u, z_s, tilde_z_s, u_logits, s_logits, tilde_s_logits, combined_logits = self.encode(all_x)
 
-        # (1) Cross entropy: both u_logits and combined_logits
+        # CE mixing on u and combined
         loss_ce_u = F.cross_entropy(u_logits, all_y)
         loss_ce_comb = F.cross_entropy(combined_logits, all_y)
-        loss_ce = (1.0 - self.gamma) * loss_ce_u + self.gamma * loss_ce_comb
+        # loss_ce = (1.0 - self.gamma) * loss_ce_u + self.gamma * loss_ce_comb
+        loss_ce=loss_ce_u
 
         # (2) MMD across domains (z_u)
         loss_mmd = self._mmd_multi_domains(z_u, domain_labels)
 
-        # (3) Gradient optimality
-        loss_grad = self._grad_optimality_penalty(tilde_s_logits, all_y, domain_labels)
+        # IRM penalty（按域）
+        penalty = 0.0
+        for d in domain_labels.unique():
+            logits_d = u_logits[domain_labels == d]
+            y_d = all_y[domain_labels == d]
+            penalty += self._irm_penalty(logits_d, y_d)
+        penalty /= len(minibatches)
+        penalty_weight = (self.hparams['irm_lambda']
+                          if self.update_steps >= self.hparams['irm_penalty_anneal_iters']
+                          else 1.0)
 
-        # (4) Conditional independence (mutual information proxy)
+
+
+        #  gradient penalty on inner_loss = CE(tilde_s) + mi_lambda * MI_proxy(u, s | y)
         with torch.no_grad():
             u_probs = F.softmax(u_logits, dim=1)
         s_probs = F.softmax(s_logits, dim=1)
-        loss_mi = self._conditional_independence_reg(u_probs, s_probs, all_y)
 
-        loss = loss_ce + self.grad_lambda * loss_grad + self.mi_lambda * loss_mi
+        # MI proxy part
+        loss_mi = self._conditional_independence_reg(
+            A_probs=u_probs,  # from u_logits
+            B_probs=s_probs,  # from s_logits (unmasked)
+            y=all_y
+        )
+
+        loss_grad = self._constraint_grad(
+            u_logits=u_logits,
+            u_probs=u_probs,
+            s_probs=s_probs,
+            y=all_y,
+            domain_labels=domain_labels
+        )
+
+        loss = (loss_ce
+                + penalty_weight * penalty
+                + self.mi_lambda*loss_mi
+                + self.grad_lambda * loss_grad)
+
+        if self.update_steps == self.hparams['irm_penalty_anneal_iters']:
+            self.optimizer = torch.optim.Adam(
+                list(self.featurizer.parameters())
+                + list(self.projection_phi.parameters())
+                + list(self.projection_psi.parameters())
+                + list(self.classifier_u.parameters())
+                + list(self.classifier_tilde_s.parameters()),
+                lr=self.hparams["lr"],
+                weight_decay=self.hparams["weight_decay"],
+            )
 
         self.optimizer.zero_grad()
         loss.backward()
@@ -3621,33 +3694,53 @@ class VITA(Algorithm):
 
         return {
             "loss_total": float(loss.item()),
+            "loss_ce": float(loss_ce.item()),
             "loss_ce_u": float(loss_ce_u.item()),
             "loss_ce_comb": float(loss_ce_comb.item()),
-            "loss_mmd": float(loss_mmd.item()),
             "loss_grad": float(loss_grad.item()),
             "loss_mi": float(loss_mi.item()),
         }
 
-    # -------- FINETUNE STEP --------
+    # ----------------- Phase 2: supervised tilde_s finetune -----------------
+    def _train2_step(self, minibatches):
+        """
+        Phase 2 objective (supervised):
+          Only update classifier_tilde_s and mask using real labels.
+          total = CE(tilde_s_logits, y)
+        """
+        all_x = torch.cat([x for x, _ in minibatches], dim=0)
+        all_y = torch.cat([y for _, y in minibatches], dim=0)
+
+        _, _, _, _, _, tilde_s_logits, combined_logits = self.encode(all_x)
+        loss_s=F.cross_entropy(tilde_s_logits, all_y)
+        loss_cls=F.cross_entropy(combined_logits, all_y)
+
+        loss = loss_s+loss_cls
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        return {
+            "loss_total": float(loss.item())
+        }
+
+    # ----------------- Phase 3: UDA finetune (unchanged) -----------------
     @torch.no_grad()
     def _make_pseudo(self, logits):
-        """Generate pseudo-labels from logits (argmax over softmax)."""
+        """Argmax over softmax as pseudo labels."""
         return logits.softmax(dim=1).argmax(dim=1)
 
     def _finetune_step(self, uda_loader):
         """
         Finetune only classifier_tilde_s and mask on unlabeled data.
-        Uses pseudo-labels generated from u_logits.
+        Pseudo labels come from u_logits.
         """
         self.classifier_tilde_s.train()
-        total_loss = 0.0
-        n_batches = 0
+        total_loss, n_batches = 0.0, 0
 
         for batch in uda_loader:
-            if isinstance(batch, (list, tuple)):
-                x_u = batch[0]
-            else:
-                x_u = batch
+            x_u = batch[0] if isinstance(batch, (list, tuple)) else batch
             x_u = x_u.to(next(self.parameters()).device)
 
             _, _, _, u_logits, _, tilde_s_logits, _ = self.encode(x_u)
@@ -3662,18 +3755,30 @@ class VITA(Algorithm):
             n_batches += 1
 
         avg = total_loss / max(n_batches, 1)
-        return { "loss_total": avg}
+        return {"loss_total": avg}
 
-    # ================= INFERENCE =================
+    # ===================== INFERENCE =====================
     def predict(self, x):
         """Return combined logits for inference."""
         _, _, _, _, _, _, combined_logits = self.encode(x)
         return combined_logits
 
     def predict_u(self, x):
-        """Return combined logits for inference."""
+        """Return u branch logits for analysis/auxiliary usage."""
         _, _, _, u_logits, _, _, _ = self.encode(x)
         return u_logits
+
+    # ================= IRM UTILITIES =================
+    @staticmethod
+    def _irm_penalty(logits, y):
+        device = "cuda" if logits[0][0].is_cuda else "cpu"
+        scale = torch.tensor(1.).to(device).requires_grad_()
+        loss_1 = F.cross_entropy(logits[::2] * scale, y[::2])
+        loss_2 = F.cross_entropy(logits[1::2] * scale, y[1::2])
+        grad_1 = autograd.grad(loss_1, [scale], create_graph=True)[0]
+        grad_2 = autograd.grad(loss_2, [scale], create_graph=True)[0]
+        result = torch.sum(grad_1 * grad_2)
+        return result
 
     # ================= MMD UTILITIES =================
     def _my_cdist(self, x1, x2):
@@ -3715,44 +3820,103 @@ class VITA(Algorithm):
                     cnt += 1
         return penalty / cnt if cnt > 0 else z_u.new_tensor(0.0)
 
-    # ================= GRADIENT OPTIMALITY (ACTIR STYLE) =================
-    def _grad_optimality_penalty(self, tilde_s_logits, y, domain_labels):
+    # ===================== GRAD CONSTRAINT =====================
+    def _constraint_grad(self, u_logits, u_probs, s_probs, y, domain_labels):
         """
-        Compute ACTIR-style gradient penalty:
-        For each domain, compute CE(tilde_s_logits, y),
-        then compute gradient norm wrt s_head and mask.
+        Compute per-domain gradient penalty of inner_loss w.r.t. (classifier_tilde_s params + mask).
+        inner_loss = CE(tilde_s_logits, y) + mi_lambda * MI_proxy(u, s | y)
+
+        Returns average gradient-norm-squared across domains.
         """
-        params = list(self.classifier_tilde_s.parameters()) + [self.mask]
-        total = 0.0
+        params = list(self.projection_psi.parameters())
+        total, n_dom = 0.0, 0
+
         domains = domain_labels.unique()
         for d in domains:
-            idx = domain_labels == d
+            idx = (domain_labels == d)
             if idx.sum() < 2:
                 continue
-            logits_d = tilde_s_logits[idx]
-            y_d = y[idx]
-            inner_loss = F.cross_entropy(logits_d, y_d)
-            grads = torch.autograd.grad(inner_loss, params, create_graph=True, retain_graph=True, allow_unused=True)
-            grad_norm_sq = sum((g.pow(2).sum() for g in grads if g is not None))
-            total += grad_norm_sq
-        return total / len(domains) if len(domains) > 0 else tilde_s_logits.new_tensor(0.0)
 
-    # ================= MUTUAL INFORMATION PROXY =================
-    def _conditional_independence_reg(self, A_probs, B_probs, y):
+            # CE part
+            ce_d = F.cross_entropy(u_logits[idx], y[idx])
+            penalty=self._irm_penalty(u_logits[idx], y[idx])
+            penalty_weight = (self.hparams['irm_lambda'] if self.update_steps
+                                                            >= self.hparams['irm_penalty_anneal_iters'] else
+                              1.0)
+
+            # MI proxy part
+            mi_d = self._conditional_independence_reg(
+                A_probs=u_probs[idx],  # from u_logits
+                B_probs=s_probs[idx],  # from s_logits (unmasked)
+                y=y[idx]
+            )
+
+            inner_loss = ce_d + self.mi_lambda * mi_d + penalty_weight * penalty
+
+            grads = torch.autograd.grad(
+                inner_loss, params,
+                create_graph=True, retain_graph=True, allow_unused=True
+            )
+            grad_norm_sq = sum((g.pow(2).sum() for g in grads if g is not None))
+            total = total + grad_norm_sq
+            n_dom += 1
+
+        if n_dom == 0:
+            return u_logits.new_tensor(0.0)
+        return total / n_dom
+
+
+    # ===================== MI PROXY =====================
+    def _conditional_independence_reg(self,
+                                      A_probs: torch.Tensor,
+                                      B_probs: torch.Tensor,
+                                      y: torch.Tensor) -> torch.Tensor:
         """
-        Conditional independence regularizer (MI proxy):
-        reg = || E[ A * (B - E[B|Y]) ] ||_1
-        A = softmax(u_logits), B = softmax(s_logits).
+        Conditional-independence regularizer (MI proxy), strictly following the provided
+        DiscreteConditionalExpecationTest implementation:
+
+          reg_vec = DiscreteConditionalExpecationTest(A_probs, B_probs, y)
+          reg = || reg_vec ||_1
+
+        A_probs = softmax(u_logits), shape (N, C)
+        B_probs = softmax(s_logits), shape (N, C)
+        y       = class labels (N,) or (N,1), dtype long/int
         """
-        N, C = A_probs.size()
-        device = A_probs.device
-        mu = torch.zeros((C, C), device=device)
-        class_ids = y.unique()
-        for c in class_ids:
-            idx = y == c
-            if idx.any():
-                mu[c] = B_probs[idx].mean(dim=0)
-        mu_y = mu[y]  # per-sample conditional mean
-        centered = B_probs - mu_y
-        est = (A_probs * centered).mean(dim=0)
-        return torch.sum(torch.abs(est))
+        reg_vec = self._discrete_conditional_expectation_test(A_probs, B_probs, y)
+        reg = torch.sum(torch.abs(reg_vec))
+        return reg
+
+    def _discrete_conditional_expectation_test(self,
+                                               x: torch.Tensor,
+                                               y: torch.Tensor,
+                                               z: torch.Tensor) -> torch.Tensor:
+        n, _ = x.shape
+
+        # flatten z to (N,)
+        if z.dim() > 1:
+            temp_z = z[:, 0]
+        else:
+            temp_z = z
+
+        # sort by z
+        labels_in_batch_sorted, indices = torch.sort(temp_z)
+        # find boundaries of each unique z
+        unique_ixs = 1 + (labels_in_batch_sorted[1:] - labels_in_batch_sorted[:-1]).nonzero()
+        unique_ixs = [0] + unique_ixs.flatten().cpu().numpy().tolist() + [len(temp_z)]
+
+        estimate = torch.zeros(y.size(1), device=y.device, dtype=y.dtype)
+        for j in range(len(unique_ixs) - 1):
+            l, r = unique_ixs[j], unique_ixs[j + 1]
+            count = r - l
+            if count < 2:
+                continue
+            curr_class_slice = slice(l, r)
+            curr_class_indices = indices[curr_class_slice].sort()[0]  # ascending indices within this z-group
+
+            y_cond_z = torch.mean(y[curr_class_indices, :], dim=0, keepdim=True)  # E[y|z]
+            estimate += torch.sum(
+                x[curr_class_indices, :] * (y[curr_class_indices, :] - y_cond_z),
+                dim=0
+            )
+
+        return estimate / n

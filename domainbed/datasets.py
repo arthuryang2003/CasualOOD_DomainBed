@@ -48,6 +48,7 @@ DATASETS = [
     "NICOMixed",
     'ColoredMNIST_IRM',
     'ColoredMNISTWithColor',
+    'ColoredCOCO',
     'COCOPlaces',
 
 ]
