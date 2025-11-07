@@ -278,69 +278,126 @@ class ColoredMNIST_IRM(MultipleDomainDataset):
         return (a - b).abs()
 
 
-class NICOMixedEnvironment(torch.utils.data.Dataset):
-    def __init__(self, images_root, csv_file_path, input_shape, transform):
-        super().__init__()
-        self.label_dict = {'animal': 0, 'vehicle': 1}
+# class NICOMixedEnvironment(torch.utils.data.Dataset):
+#     def __init__(self, images_root, csv_file_path, input_shape, transform):
+#         super().__init__()
+#         self.label_dict = {'animal': 0, 'vehicle': 1}
+#         self.transform = transform
+#         self.img_paths = []
+#         self.targets = []
+#
+#         with open(csv_file_path) as f:
+#             reader = csv.reader(f)
+#             for img_path, category_name, context_name, superclass in reader:
+#                 img_path = img_path.replace('\\', '/')
+#                 img_path = img_path.replace('_', ' ')
+#                 img_path = Path(images_root, superclass, 'images', img_path)
+#                 self.targets.append((img_path, {'animal': 0, 'vehicle': 1}[superclass]))
+#
+#         # with open(csv_file_path) as f:
+#         #     for line in f.readlines():
+#         #         img_path, category_name, context_name, superclass = line.strip().split(',')
+#         #         img_path = img_path.replace('\\', '/')
+#         #         img_path = img_path.replace('_', ' ')
+#         #         full_path = f'{images_root}/{superclass}/{img_path}'
+#         #         # if not os.path.exists(full_path):
+#         #         #     print(f"[Warning] File not found and skipped: {full_path}")
+#         #         #     continue
+#         #
+#         #         self.img_paths.append(full_path)
+#         #         self.targets.append(self.label_dict[superclass])
+#
+#     def __len__(self):
+#         return len(self.targets)
+#
+#     def __getitem__(self, key):
+#         with open(self.img_paths[key], 'rb') as f:
+#             image = Image.open(f).convert('RGB')
+#             image = self.transform(image)
+#         return image, self.targets[key]
+
+
+
+
+# class NICOMixed(MultipleDomainDataset):
+#     #     ENVIRONMENTS = ["train1", "train2", "train3", "train4", "val", "test"]
+#     ENVIRONMENTS = ["train1", "train2", "val", "test"]
+#     CHECKPOINT_FREQ = 200
+#
+#     def __init__(self, root, test_envs, hparams):
+#         self.input_shape = (3, 224, 224)
+#         self.datasets = []
+#         self.num_classes = 2
+#
+#         normalize = transforms.Normalize(
+#             mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+#
+#         transform = transforms.Compose([
+#             transforms.Resize((int(self.input_shape[1] / 0.875), int(self.input_shape[2] / 0.875))),
+#             transforms.CenterCrop(self.input_shape[1]),
+#             transforms.ToTensor(),
+#             normalize
+#         ])
+#
+#         augment_transform = self.get_transform(
+#             self.input_shape[1], normalize, hparams.get('data_augmentation_scheme', 'domainbed'))
+#
+#         for i, env_name in enumerate(self.ENVIRONMENTS):
+#             if hparams['data_augmentation'] and (i not in test_envs):
+#                 env_transform = augment_transform
+#             else:
+#                 env_transform = transform
+#             csv_file_path = os.path.join(f'{root}/NICO/mixed_split_corrected/env_{env_name}.csv')
+#             self.datasets.append(NICOMixedEnvironment(f'{root}/NICO', csv_file_path, self.input_shape, env_transform))
+
+#
+class NICOMixedEnvironment(Dataset):
+    def __init__(self, split_csv, img_root_dir, transform=None):
         self.transform = transform
-        self.img_paths = []
-        self.targets = []
-        with open(csv_file_path) as f:
-            for line in f.readlines():
-                img_path, category_name, context_name, superclass = line.strip().split(',')
+        self.samples = []
+        with open(split_csv) as f:
+            reader = csv.reader(f)
+            for img_path, category_name, context_name, superclass in reader:
                 img_path = img_path.replace('\\', '/')
                 img_path = img_path.replace('_', ' ')
-                full_path = f'{images_root}/{superclass}/{img_path}'
-                # if not os.path.exists(full_path):
-                #     print(f"[Warning] File not found and skipped: {full_path}")
-                #     continue
-
-                self.img_paths.append(full_path)
-                self.targets.append(self.label_dict[superclass])
+                img_path = Path(img_root_dir, superclass, img_path)
+                self.samples.append((img_path, {'animal': 0, 'vehicle': 1}[superclass]))
 
     def __len__(self):
-        return len(self.targets)
+        return len(self.samples)
 
-    def __getitem__(self, key):
-        with open(self.img_paths[key], 'rb') as f:
-            image = Image.open(f).convert('RGB')
+    def __getitem__(self, index):
+        img_path, label = self.samples[index]
+        image = Image.open(img_path).convert('RGB')
+        if self.transform:
             image = self.transform(image)
-        return image, self.targets[key]
-
-
-
+        label = torch.tensor(label)
+        return image, label
 
 class NICOMixed(MultipleDomainDataset):
-    #     ENVIRONMENTS = ["train1", "train2", "train3", "train4", "val", "test"]
-    ENVIRONMENTS = ["train1", "train2", "val", "test"]
     CHECKPOINT_FREQ = 200
-
+    ENVIRONMENTS = ['train1', 'train2', 'val', 'test']
     def __init__(self, root, test_envs, hparams):
-        self.input_shape = (3, 224, 224)
+        super().__init__()
+
+        transform = get_transform()
+        augment_scheme = hparams.get('data_augmentation_scheme', 'default')
+        augment_transform = get_augment_transform(augment_scheme)
+
         self.datasets = []
-        self.num_classes = 2
-
-        normalize = transforms.Normalize(
-            mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-
-        transform = transforms.Compose([
-            transforms.Resize((int(self.input_shape[1] / 0.875), int(self.input_shape[2] / 0.875))),
-            transforms.CenterCrop(self.input_shape[1]),
-            transforms.ToTensor(),
-            normalize
-        ])
-
-        augment_transform = self.get_transform(
-            self.input_shape[1], normalize, hparams.get('data_augmentation_scheme', 'domainbed'))
-
         for i, env_name in enumerate(self.ENVIRONMENTS):
             if hparams['data_augmentation'] and (i not in test_envs):
                 env_transform = augment_transform
             else:
                 env_transform = transform
-            csv_file_path = os.path.join(f'{root}/NICO/mixed_split_corrected/env_{env_name}.csv')
-            self.datasets.append(NICOMixedEnvironment(f'{root}/NICO', csv_file_path, self.input_shape, env_transform))
+            split_csv = Path(root, 'NICO', 'mixed_split_corrected',
+                             f'env_{env_name}.csv')
+            dataset = NICOMixedEnvironment(split_csv, Path(root, 'NICO'),
+                                             env_transform)
+            self.datasets.append(dataset)
 
+        self.input_shape = (3, 224, 224,)
+        self.num_classes = 2  # animal or vehicle
 
 class CelebA(torch.utils.data.Dataset):
     def __init__(self, dataframe, folder_dir, target_id, transform=None, cdiv=0, ccor=0):

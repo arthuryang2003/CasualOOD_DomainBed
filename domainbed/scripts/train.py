@@ -295,8 +295,8 @@ if __name__ == "__main__":
             evals = zip(eval_loader_names, eval_loaders, eval_weights)
 
             for name, loader, weights in evals:
-                if step >= 5000 :
-                    misc.check_single_class_prediction(algorithm, loader, device)
+                # if step >= 5000 :
+                #     misc.check_single_class_prediction(algorithm, loader, device)
                 acc = misc.accuracy(algorithm, loader, weights, device)
                 results[name + '_acc'] = acc
 

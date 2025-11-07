@@ -12,7 +12,7 @@ def _hparams(algorithm, dataset, random_seed):
     Global registry of hyperparams. Each entry is a (default, random) tuple.
     New algorithms / networks / etc. should add entries here.
     """
-    SMALL_IMAGES = ['Debug28', 'RotatedMNIST', 'ColoredMNIST', 'ColoredMNISTWithColor']
+    SMALL_IMAGES = ['Debug28', 'RotatedMNIST', 'ColoredMNIST', 'ColoredMNISTWithColor',"Synthetic"]
 
     hparams = {}
 
@@ -222,16 +222,28 @@ def _hparams(algorithm, dataset, random_seed):
         _hparam('phase1_steps', 5001, lambda r: int(r.choice([5001])))
         _hparam('phase2_steps', 1000, lambda r: int(r.choice([1000])))
         _hparam('finetune_steps', 1000, lambda r: int(r.choice([1000])))
+        # _hparam('irm_lambda', 1e2, lambda r: 10**r.uniform(-1, 5))
+        # _hparam('irm_penalty_anneal_iters', 500,
+        #         lambda r: int(10**r.uniform(0, 4)))
 
-        _hparam('irm_lambda', 70,
-                lambda r: 10 ** r.uniform(math.log10(50), math.log10(200)))
-        _hparam('irm_penalty_anneal_iters', 3500,
-                lambda r: int(10 ** r.uniform(math.log10(3000), math.log10(4500))))
+        if dataset == 'ColoredMNIST':
+            _hparam('irm_lambda', 70,
+                    lambda r: 10 ** r.uniform(math.log10(50), math.log10(200)))
+            _hparam('irm_penalty_anneal_iters', 3500,
+                    lambda r: int(10 ** r.uniform(math.log10(3000), math.log10(4500))))
+        else:
+            _hparam('irm_lambda', 1e2, lambda r: 10**r.uniform(-1, 5))
+            _hparam('irm_penalty_anneal_iters', 500,
+                    lambda r: int(10**r.uniform(0, 4)))
+
+        # _hparam('irm_lambda', 180.0, lambda r: int(r.choice([180])))
+        # _hparam('irm_penalty_anneal_iters', 3500.0, lambda r: int(r.choice([3500])))
 
         # loss weights
-        _hparam('mi_lambda', 10.0, lambda r: int(r.choice([10])))
+        _hparam('mi_lambda', 10.0, lambda r: 10.0)
         # _hparam('mi_lambda', 1.0, lambda r: 10 ** r.uniform(-1, 1))
-        _hparam('grad_lambda', 10.0, lambda r: int(r.choice([10])))
+        # _hparam('grad_lambda', 10.0, lambda r: int(r.choice(list(range(0, 11)))))
+        _hparam('grad_lambda', 10.0, lambda r:10.0)
         # _hparam('grad_lambda', 1.0, lambda r: 10 ** r.uniform(-1, 1))
         # _hparam('mmd_lambda', 1.0, lambda r: 10**r.uniform(-1, 1))
 
@@ -272,11 +284,16 @@ def _hparams(algorithm, dataset, random_seed):
     if dataset in SMALL_IMAGES:
         if algorithm == "ADRMX":
             _hparam('lr', 3e-3, lambda r: r.choice([5e-4, 1e-3, 2e-3, 3e-3]))
+        elif algorithm == "VITA":
+            _hparam('lr', 1e-3, lambda r: 1e-3)
         else:
             _hparam('lr', 1e-3, lambda r: 10**r.uniform(-4.5, -2.5))
+            # _hparam('lr', 1e-3, lambda r: 1e-3)
     else:
         if algorithm == "ADRMX":
             _hparam('lr', 3e-5, lambda r: r.choice([2e-5, 3e-5, 4e-5, 5e-5]))
+        elif algorithm == "VITA":
+            _hparam('lr', 5e-5, lambda r: 5e-5)
         else:
             _hparam('lr', 5e-5, lambda r: 10**r.uniform(-5, -3.5))
 
@@ -286,7 +303,10 @@ def _hparams(algorithm, dataset, random_seed):
         _hparam('weight_decay', 0., lambda r: 10**r.uniform(-6, -2))
 
     if dataset in SMALL_IMAGES:
-        _hparam('batch_size', 64, lambda r: int(2**r.uniform(3, 9)))
+        # _hparam('batch_size', 64, lambda r: int(2**r.uniform(3, 9)))
+        _hparam('batch_size', 64, lambda r: 64)
+    elif algorithm == "VITA":
+        _hparam('batch_size', 32, lambda r: 32)
     elif algorithm == 'ARM':
         _hparam('batch_size', 8, lambda r: 8)
     elif algorithm == 'RDM':
