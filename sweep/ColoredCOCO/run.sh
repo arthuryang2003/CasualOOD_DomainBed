@@ -1,4 +1,4 @@
-dataset=COCOPlaces
+dataset=ColoredCOCO
 command=$1
 data_dir=$2
 gpu_id=$3
@@ -11,8 +11,8 @@ python3 -m domainbed.scripts.sweep ${command}\
        --command_launcher smart_gpu\
        --fixed_test_envs 2\
        --n_hparams 20\
-       --n_trials 3\
+       --n_trials 1\
        --skip_confirmation\
        --hparams "$(<sweep/${dataset}/hparams.json)"\
-       --output_dir "sweep/${dataset}/VITA_IRM_Weight"
+       --output_dir "sweep/${dataset}/VITA_v2"
 

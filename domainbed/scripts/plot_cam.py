@@ -12,7 +12,7 @@ from domainbed import datasets, algorithms
 from domainbed.lib.fast_data_loader import VisualizeDataLoader
 from domainbed.lib import reporting
 from domainbed import model_selection
-
+from PIL import ImageChops
 
 # -------------------- Utils --------------------
 def find_last_conv(module: torch.nn.Module) -> torch.nn.Module:
@@ -77,6 +77,21 @@ def load_model(model_pkl: str) -> algorithms.Algorithm:
     model.load_state_dict(checkpoint["model_dict"])
     return model
 
+# 小工具：把 CAM 统一成 [H,W] 的 torch.Tensor(float)
+def cam_to_2d_tensor(cam_map):
+    # 常见：GradCAM 可能返回 [H,W] / [1,H,W] / list(np/torch)
+    if isinstance(cam_map, (list, tuple)):
+        cam_map = cam_map[0]
+    import numpy as np
+    if isinstance(cam_map, np.ndarray):
+        cam_map = torch.from_numpy(cam_map)
+    cam_map = cam_map.squeeze()
+    return cam_map.float()
+
+# 简单的 0-1 归一化
+def norm01(t):
+    tmin, tmax = t.min(), t.max()
+    return (t - tmin) / (tmax - tmin + 1e-12)
 
 def select_images(dset, env_idx: int, k: int = 10):
     """从测试域选择 k 张样本，返回 [(CHW tensor, label int), ...]（不做 batch）"""
@@ -131,6 +146,23 @@ def visualize_for_algorithms(
     if len(samples) == 0:
         raise RuntimeError("No samples selected from test env.")
 
+    # keep_pos_1based = [4, 5, 6, 9, 10]
+    # max_pos = max(keep_pos_1based)
+    #
+    # # 确保至少抽到 max_pos 张样本（比如 10 张）
+    # k_images = max(k_images, max_pos)
+    #
+    # samples = select_images(dset, test_env, k=k_images)
+    # if len(samples) < max_pos:
+    #     raise RuntimeError(
+    #         f"需要至少 {max_pos} 张样本，但实际只选到了 {len(samples)}。"
+    #         f"请增大 k_images 或让 select_images 保证返回数量。"
+    #     )
+    #
+    # # 二次筛选：只保留第 4、5、6、9、10（按 1-based）
+    # keep_idx_0based = [p - 1 for p in keep_pos_1based]
+    # samples = [samples[i] for i in keep_idx_0based]
+
     # 3. 加载各算法模型（VITA 用 sweep 方式找最佳）
     alg_models, cam_extractors = {}, {}
     for alg in algorithms_to_load:
@@ -183,6 +215,37 @@ def visualize_for_algorithms(
             cam = cam_extractors[alg]
 
             img_batched.requires_grad_(True)
+
+            # if alg == 'VITA':
+            #     with torch.enable_grad():
+            #
+            #         z_u, z_s, tilde_z_s, u_logits, s_logits, tilde_s_logits, combined_logits = model.encode(img_batched)
+            #         # concat_z = torch.cat([z_u, tilde_z_s], dim=1)
+            #         # weights = model.reweighting(concat_z)
+            #         class_idx_u = int(u_logits.argmax(dim=1))
+            #         class_idx_s = int(tilde_s_logits.argmax(dim=1))
+            #         cam_u = cam(class_idx_u, scores=u_logits, retain_graph=True)
+            #         cam_s = cam(class_idx_s, scores=tilde_s_logits, retain_graph=True)
+            #
+            #     # # 取到 [H,W]
+            #     # cam_u = cam_to_2d_tensor(cam_u)
+            #     # cam_s = cam_to_2d_tensor(cam_s)
+            #     #
+            #     # # 各自归一化
+            #     # cam_u_n = norm01(cam_u)
+            #     # cam_s_n = norm01(cam_s)
+            #     # cam_mix =cam_u_n+cam_s_n
+            #
+            #     # 叠加方式：逐像素取最大值（谁亮取谁）
+            #     heatmap_u = overlay_mask(img_pil, cam_to_pil(cam_u[0]), alpha=0.5) # -> PIL.Image
+            #     heatmap_s = overlay_mask(img_pil, cam_to_pil(cam_s[0]), alpha=0.5)
+            #
+            #     heat = ImageChops.lighter(heatmap_u, heatmap_s)
+            #
+            #     # # 一次性着色 + 与原图混合（不再叠彩色 PIL）
+            #     # heat = overlay_mask(img_pil, cam_to_pil(cam_mix[0].cpu()), alpha=0.5)
+            #
+            # else:
             with torch.enable_grad():
                 logits = model.predict(img_batched)
                 pred_cls = int(logits.argmax(1).item())

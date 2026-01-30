@@ -17,6 +17,7 @@ import pickle
 import pandas as pd
 
 from PIL import UnidentifiedImageError
+import ast
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 DATASETS = [
@@ -176,6 +177,7 @@ class Debug224(Debug):
 
 
 
+
 class Synthetic(MultipleDomainDataset):
     """
     Anti-causal synthetic dataset with invariant (Xu) and environment-dependent (Xs) features.
@@ -187,7 +189,8 @@ class Synthetic(MultipleDomainDataset):
         label = Y in {0,1}
     """
 
-    ENVIRONMENTS = ['beta0.9', 'beta0.8', 'beta0.1']
+    DEFAULT_BETA_VALUES = [0.9, 0.8, 0.1]
+    ENVIRONMENTS = [f'beta{b}' for b in DEFAULT_BETA_VALUES]
     INPUT_SHAPE = (2,)
 
     def __init__(self, root, test_envs, hparams):
@@ -196,7 +199,14 @@ class Synthetic(MultipleDomainDataset):
         self.num_classes = 2
 
         n_samples = int(hparams.get('n_samples', 10000))
-        beta_values = [0.9, 0.8, 0.1]  # 三个环境
+        beta_values = self._parse_beta_values(
+            hparams.get('beta_values', self.DEFAULT_BETA_VALUES)
+        )
+        if len(beta_values) == 0:
+            raise ValueError('beta_values must contain at least one value')
+
+        self.beta_values = beta_values
+        self.environment_names = [f'beta{beta}' for beta in beta_values]
 
         def bern(p, size):
             return torch.bernoulli(torch.full(size, float(p)))
@@ -219,6 +229,21 @@ class Synthetic(MultipleDomainDataset):
             labels = y.view(-1).long()
 
             self.datasets.append(TensorDataset(x, labels))
+
+    @staticmethod
+    def _parse_beta_values(raw_values):
+        if isinstance(raw_values, (list, tuple)):
+            return [float(v) for v in raw_values]
+        if isinstance(raw_values, str):
+            try:
+                parsed = ast.literal_eval(raw_values)
+            except (ValueError, SyntaxError):
+                parsed = [v.strip() for v in raw_values.split(',') if v.strip()]
+            else:
+                if isinstance(parsed, (list, tuple)):
+                    return [float(v) for v in parsed]
+            return [float(v) for v in parsed]
+        return [float(raw_values)]
 
 class ColoredMNIST_IRM(MultipleDomainDataset):
     CHECKPOINT_FREQ = 500

@@ -3057,374 +3057,9 @@ class ASGDRO(ERM):
             model.apply(_enable)
 
 
-class VITA_Zu_only(IRM):
-    def __init__(self, input_shape, num_classes, num_domains, hparams):
-        super(VITA_Zu_only, self).__init__(input_shape, num_classes, num_domains, hparams)
-
-        self.num_classes = num_classes
-        self.num_domains = num_domains
-        self.hparams = hparams
 
 
-        # Override modules from IRM with custom projections and classifiers
-        self.featurizer = networks.Featurizer(input_shape, hparams)
-
-        self.z_dim = self.featurizer.n_outputs
-
-        self.projection_phi = nn.Sequential(
-            nn.Linear(self.featurizer.n_outputs, self.z_dim),
-        )
-        self.projection_psi = nn.Sequential(
-            nn.Linear(self.featurizer.n_outputs, self.z_dim),
-        )
-
-        self.classifier_u = networks.Classifier(self.z_dim, num_classes, is_nonlinear=True)
-        self.domain_classifier = networks.Classifier(self.z_dim, num_domains, is_nonlinear=True)
-
-        self.optimizer = torch.optim.Adam(
-            list(self.featurizer.parameters()) +
-            list(self.projection_phi.parameters()) +
-            list(self.projection_psi.parameters()) +
-            list(self.classifier_u.parameters()) +
-            list(self.domain_classifier.parameters()),
-            lr=self.hparams["lr"],
-            weight_decay=self.hparams['weight_decay'],
-        )
-
-    def update(self, minibatches, unlabeled=None):
-
-        all_x = torch.cat([x for x, _ in minibatches])
-        all_y = torch.cat([y for _, y in minibatches])
-        domain_labels = torch.cat([
-            torch.full((x.size(0),), i, dtype=torch.long, device=all_x.device)
-            for i, (x, _) in enumerate(minibatches)
-        ])
-
-        z_u, z_s, u_logits = self.encode(all_x)
-        loss_cls = F.cross_entropy(u_logits, all_y)
-
-        penalty = 0.
-        for d in domain_labels.unique():
-            logits_d = u_logits[domain_labels == d]
-            y_d = all_y[domain_labels == d]
-            penalty += self._irm_penalty(logits_d, y_d)
-        penalty /= len(minibatches)
-
-        dom_logits = self.domain_classifier(z_s)
-        loss_dom = F.cross_entropy(dom_logits, domain_labels)
-        loss_mi = self.compute_conditional_MI(z_u, z_s, all_y)
-
-        penalty_weight = (self.hparams['irm_lambda'] if self.update_count
-                          >= self.hparams['irm_penalty_anneal_iters'] else 1.0)
-
-        loss = (loss_cls +
-                self.hparams.get('mi_lambda', 0.) * loss_mi +
-                penalty_weight * penalty +
-                self.hparams.get('domain_lambda', 0.) * loss_dom)
-
-        if self.update_count == self.hparams['irm_penalty_anneal_iters']:
-            self.optimizer = torch.optim.Adam(
-                list(self.featurizer.parameters()) +
-                list(self.projection_phi.parameters()) +
-                list(self.projection_psi.parameters()) +
-                list(self.classifier_u.parameters()) +
-                list(self.domain_classifier.parameters()),
-                lr=self.hparams["lr"],
-                weight_decay=self.hparams['weight_decay'],
-            )
-
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-
-        self.update_count += 1
-
-        return {'loss_total': loss.item(),
-                'loss_cls': loss_cls.item(),
-                'loss_irm': penalty.item(),
-                'loss_dom': loss_dom.item(),
-                'loss_mi': loss_mi.item()}
-
-    def encode(self, x):
-        f = self.featurizer(x)
-        z_u = self.projection_phi(f)
-        z_s = self.projection_psi(f)
-        u_logits = self.classifier_u(z_u)
-        return z_u, z_s, u_logits
-
-    def predict(self, x):
-        z_u, z_s, u_logits = self.encode(x)
-        return u_logits
-
-
-    # def compute_conditional_MI(zu, zs, y, num_classes):
-    #     batch_size, feat_dim = zu.size()
-    #     one_hot = F.one_hot(y, num_classes=num_classes).float()
-    #
-    #     sum_zs = one_hot.T @ zs
-    #     count_zs = one_hot.sum(dim=0, keepdim=True).T + 1e-6
-    #     mean_zs = sum_zs / count_zs
-    #     mean_zs_per_sample = mean_zs[y]
-    #     diff = zs - mean_zs_per_sample
-    #     weighted_diff = zu * diff
-    #     avg_weighted_diff = weighted_diff.mean(dim=0)
-    #
-    #     loss_MI = torch.norm(avg_weighted_diff, p=1)
-    #     return loss_MI
-
-    def compute_conditional_MI(self, z_u, z_s, all_y):
-
-        reg_loss = torch.sum(torch.abs(self.DiscreteConditionalExpecationTest(z_u, z_s, all_y)))
-
-        return reg_loss
-
-    def DiscreteConditionalExpecationTest( self,x, y, z):
-        n, _ = x.shape
-        if len(z.shape) > 1:
-            temp_z = z[:, 0]
-        else:
-            temp_z = z
-
-        labels_in_batch_sorted, indices = torch.sort(temp_z)
-        unique_ixs = 1 + (labels_in_batch_sorted[1:] - labels_in_batch_sorted[:-1]).nonzero()
-        unique_ixs = [0] + unique_ixs.flatten().cpu().numpy().tolist() + [len(temp_z)]
-
-        estimate = 0
-        for j in range(len(unique_ixs) - 1):
-            current_class_indices = unique_ixs[j], unique_ixs[j + 1]
-            count = current_class_indices[1] - current_class_indices[0]
-            if count < 2:
-                continue
-            curr_class_slice = slice(*current_class_indices)
-            curr_class_indices = indices[curr_class_slice].sort()[0]
-
-            y_cond_z = torch.mean(y[curr_class_indices, :], dim=0, keepdim=True)
-            estimate += torch.sum(x[curr_class_indices, :] * (y[curr_class_indices, :] - y_cond_z), dim=0)
-
-        return estimate / n
 #
-#
-# VITA IRM
-# class VITA(VITA_Zu_only):
-#     def __init__(self, input_shape, num_classes, num_domains, hparams):
-#         super(VITA, self).__init__(input_shape, num_classes, num_domains, hparams)
-#
-#         # Extra modules
-#         self.mask = nn.Parameter(torch.ones(self.z_dim))
-#         self.classifier_tilde_s = networks.Classifier(self.z_dim, num_classes, is_nonlinear=True)
-#
-#         # Phases
-#         self.phase1_steps = hparams.get('phase1_steps', 0)
-#         self.phase2_steps = hparams.get('phase2_steps', 0)
-#         self.finetune_steps = hparams.get('finetune_steps', 0)
-#
-#
-#         self.update_steps = 0
-#
-#         # Trainable reweighting module combining u_logits and tilde_s_logits
-#         concat_dim = self.z_dim * 2
-#         self.reweighting = nn.Sequential(
-#             nn.Linear(concat_dim, self.z_dim),
-#             nn.ReLU(),
-#             nn.Linear(self.z_dim, 2),
-#             nn.Softmax(dim=1)
-#         )
-#
-#         # 默认进入 phase 1
-#         self.set_phase(1)
-#
-#     def encode(self, x):
-#         f = self.featurizer(x)
-#         z_u = self.projection_phi(f)
-#         z_s = self.projection_psi(f)
-#         tilde_z_s = torch.sigmoid(self.mask) * z_s
-#
-#         u_logits = self.classifier_u(z_u)
-#         s_logits = self.classifier_tilde_s(z_s)
-#         tilde_s_logits = self.classifier_tilde_s(tilde_z_s)
-#
-#         concat_z = torch.cat([z_u, tilde_z_s], dim=1)
-#         weights = self.reweighting(concat_z)  # (batch_size, 2)
-#
-#         combined_logits = (
-#             weights[:, 0:1] * u_logits
-#             + weights[:, 1:2] * tilde_s_logits
-#         )
-#
-#         return z_u, z_s, u_logits, s_logits, tilde_s_logits, combined_logits
-#
-#     def update(self, minibatches, unlabeled=None):
-#         self.update_steps += 1
-#
-#         # 阶段切换
-#         if self.update_steps <= self.phase1_steps:
-#             if self.phase != 1:
-#                 self.set_phase(1)
-#         elif self.update_steps <= self.phase1_steps + self.phase2_steps:
-#             if self.phase != 2:
-#                 self.set_phase(2)
-#         else:
-#             if self.phase not in (3, "finetune"):
-#                 self.set_phase("finetune")
-#
-#         # 取数据
-#         if self.phase in (3, "finetune") and unlabeled is not None:
-#             all_x = torch.cat(unlabeled)
-#             all_y = None
-#             domain_labels = None
-#         else:
-#             all_x = torch.cat([x for x, _ in minibatches])
-#             all_y = torch.cat([y for _, y in minibatches])
-#             if self.phase == 1:
-#                 domain_labels = torch.cat([
-#                     torch.full((x.size(0),), i, dtype=torch.long, device=all_x.device)
-#                     for i, (x, _) in enumerate(minibatches)
-#                 ])
-#
-#         z_u, z_s, u_logits, s_logits, tilde_s_logits, combined_logits = self.encode(all_x)
-#
-#         if self.phase == 1:
-#             # 分类损失（不变特征）
-#             loss_cls = F.cross_entropy(u_logits, all_y)
-#
-#             # IRM penalty（按域）
-#             penalty = 0.0
-#             for d in domain_labels.unique():
-#                 logits_d = u_logits[domain_labels == d]
-#                 y_d = all_y[domain_labels == d]
-#                 penalty += self._irm_penalty(logits_d, y_d)
-#             penalty /= len(minibatches)
-#
-#             # 退火权重
-#             penalty_weight = (self.hparams['irm_lambda']
-#                               if self.update_count >= self.hparams['irm_penalty_anneal_iters']
-#                               else 1.0)
-#
-#             # 域判别 + 条件MI
-#             dom_logits = self.domain_classifier(z_s)
-#             loss_dom = F.cross_entropy(dom_logits, domain_labels)
-#             loss_mi = self.compute_conditional_MI(z_u, z_s, all_y)
-#
-#             loss = (loss_cls
-#                     + penalty_weight * penalty
-#                     + self.hparams.get('mi_lambda', 0.) * loss_mi
-#                     + self.hparams.get('domain_lambda', 0.) * loss_dom)
-#
-#             # 在到达退火阈值那一次切换优化器（IRM习惯做法）
-#             if self.update_count == self.hparams['irm_penalty_anneal_iters']:
-#                 self.optimizer = torch.optim.Adam(
-#                     list(self.featurizer.parameters())
-#                     + list(self.projection_phi.parameters())
-#                     + list(self.projection_psi.parameters())
-#                     + list(self.classifier_u.parameters())
-#                     + list(self.domain_classifier.parameters()),
-#                     lr=self.hparams["lr"],
-#                     weight_decay=self.hparams["weight_decay"],
-#                 )
-#
-#             self.optimizer.zero_grad()
-#             loss.backward()
-#             self.optimizer.step()
-#
-#             # 仅在 phase1 计数 IRM 步数
-#             self.update_count += 1
-#
-#             return {
-#                 'loss_total': loss.item(),
-#                 'loss_cls': loss_cls.item(),
-#                 'loss_irm': penalty.item(),
-#                 'loss_dom': loss_dom.item(),
-#                 'loss_mi': loss_mi.item()
-#             }
-#
-#         elif self.phase == 2:
-#             # supervised train mask + s_head
-#             loss_s=F.cross_entropy(tilde_s_logits, all_y)
-#             loss_cls=F.cross_entropy(combined_logits, all_y)
-#             loss = loss_s+loss_cls
-#
-#             self.optimizer.zero_grad()
-#             loss.backward()
-#             self.optimizer.step()
-#
-#             return {
-#                 'loss_total': loss.item(),
-#                 'loss_cls': loss_cls.item(),
-#                 'loss_s': loss_s.item()
-#             }
-#
-#         else:  # finetune: pseudo-labels from u_head
-#             pseudo_labels = u_logits.detach().softmax(1).argmax(1)
-#             loss_s = F.cross_entropy(tilde_s_logits, pseudo_labels)
-#
-#             loss = loss_s
-#
-#             self.optimizer.zero_grad()
-#             loss.backward()
-#             self.optimizer.step()
-#
-#             return {
-#                 'loss_total': loss.item()
-#             }
-#
-#     def predict(self, x):
-#         _, _, u_logits, _, _, combined_logits = self.encode(x)
-#         if self.phase == 1:
-#             return u_logits
-#         else:
-#             return combined_logits
-#
-#     def set_phase(self, phase):
-#         """Create optimizer for each phase (color head instead of domain head)."""
-#         self.phase = phase
-#         if phase == 1:
-#             # Train: featurizer + phi/psi + u_head + color_head
-#             self.optimizer = torch.optim.Adam(
-#                 list(self.featurizer.parameters())
-#                 + list(self.projection_phi.parameters())
-#                 + list(self.projection_psi.parameters())
-#                 + list(self.classifier_u.parameters())
-#                 + list(self.domain_classifier.parameters()),
-#                 lr=self.hparams["lr"],
-#                 weight_decay=self.hparams["weight_decay"]
-#             )
-#         elif phase == 2:
-#             # Train: s_head + mask
-#             self.optimizer = torch.optim.Adam(
-#                 list(self.classifier_tilde_s.parameters())
-#                 + list(self.reweighting.parameters())
-#                 + [self.mask],
-#                 lr=self.hparams["lr"],
-#                 weight_decay=self.hparams["weight_decay"],
-#             )
-#             self.freeze_bn()
-#         elif phase == 3 or phase == "finetune":
-#             # Finetune: s_head + mask
-#             self.optimizer = torch.optim.Adam(
-#                 list(self.classifier_tilde_s.parameters())
-#                 + [self.mask],
-#                 lr=self.hparams["lr"],
-#                 weight_decay=self.hparams["weight_decay"],
-#             )
-#             self.freeze_bn()
-#         else:
-#             raise ValueError("Unsupported phase: must be 1, 2, or 'finetune'")
-#     def freeze_bn(self):
-#         """Freeze BatchNorm statistics for modules contributing to ``u_logits``."""
-#         u_related = set(chain(
-#             self.featurizer.modules(),
-#             self.projection_phi.modules(),
-#             self.classifier_u.modules()
-#         ))
-#         for m in self.modules():
-#             if m in u_related and isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d)):
-#                 m.eval()
-#                 m.track_running_stats = False
-#
-
-
-
-
 
 class VITA(Algorithm):
     """
@@ -3636,9 +3271,6 @@ class VITA(Algorithm):
         # loss_ce = (1.0 - self.gamma) * loss_ce_u + self.gamma * loss_ce_comb
         loss_ce=loss_ce_u
 
-        # (2) MMD across domains (z_u)
-        loss_mmd = self._mmd_multi_domains(z_u, domain_labels)
-
         # IRM penalty（按域）
         penalty = 0.0
         for d in domain_labels.unique():
@@ -3666,8 +3298,7 @@ class VITA(Algorithm):
 
         loss_grad = self._constraint_grad(
             u_logits=u_logits,
-            u_probs=u_probs,
-            s_probs=s_probs,
+            s_logits=s_logits,
             y=all_y,
             domain_labels=domain_labels
         )
@@ -3760,8 +3391,12 @@ class VITA(Algorithm):
     # ===================== INFERENCE =====================
     def predict(self, x):
         """Return combined logits for inference."""
-        _, _, _, _, _, _, combined_logits = self.encode(x)
-        return combined_logits
+
+        _, _, _, u_logits, _, _, combined_logits = self.encode(x)
+        if self.phase == "train1":
+            return u_logits
+        else:
+            return combined_logits
 
     def predict_u(self, x):
         """Return u branch logits for analysis/auxiliary usage."""
@@ -3780,48 +3415,8 @@ class VITA(Algorithm):
         result = torch.sum(grad_1 * grad_2)
         return result
 
-    # ================= MMD UTILITIES =================
-    def _my_cdist(self, x1, x2):
-        """Compute squared Euclidean distance matrix."""
-        x1_norm = x1.pow(2).sum(dim=-1, keepdim=True)
-        x2_norm = x2.pow(2).sum(dim=-1, keepdim=True)
-        res = torch.addmm(x2_norm.transpose(-2, -1), x1, x2.transpose(-2, -1), alpha=-2).add_(x1_norm)
-        return res.clamp_min_(1e-30)
-
-    def _gaussian_kernel(self, x, y):
-        """Multi-bandwidth Gaussian kernel."""
-        D = self._my_cdist(x, y)
-        K = torch.zeros_like(D)
-        for g in self.kernel_gammas:
-            K.add_(torch.exp(-g * D))
-        return K
-
-    def _mmd(self, x, y):
-        """Compute Gaussian MMD between x and y."""
-        Kxx = self._gaussian_kernel(x, x).mean()
-        Kyy = self._gaussian_kernel(y, y).mean()
-        Kxy = self._gaussian_kernel(x, y).mean()
-        return Kxx + Kyy - 2.0 * Kxy
-
-    def _mmd_multi_domains(self, z_u, domain_labels):
-        """Compute average pairwise MMD across all domain pairs."""
-        domains = domain_labels.unique()
-        n = len(domains)
-        if n <= 1:
-            return z_u.new_tensor(0.0)
-        penalty = 0.0
-        cnt = 0
-        for i in range(n):
-            for j in range(i + 1, n):
-                zi = z_u[domain_labels == domains[i]]
-                zj = z_u[domain_labels == domains[j]]
-                if len(zi) > 1 and len(zj) > 1:
-                    penalty += self._mmd(zi, zj)
-                    cnt += 1
-        return penalty / cnt if cnt > 0 else z_u.new_tensor(0.0)
-
     # ===================== GRAD CONSTRAINT =====================
-    def _constraint_grad(self, u_logits, u_probs, s_probs, y, domain_labels):
+    def _constraint_grad(self, u_logits, s_logits, y, domain_labels):
         """
         Compute per-domain gradient penalty of inner_loss w.r.t. (classifier_tilde_s params + mask).
         inner_loss = CE(tilde_s_logits, y) + mi_lambda * MI_proxy(u, s | y)
@@ -3831,6 +3426,10 @@ class VITA(Algorithm):
         params = list(self.projection_psi.parameters())
         total, n_dom = 0.0, 0
 
+        with torch.no_grad():
+            u_probs = F.softmax(u_logits, dim=1)
+        s_probs = F.softmax(s_logits, dim=1)
+
         domains = domain_labels.unique()
         for d in domains:
             idx = (domain_labels == d)
@@ -3838,7 +3437,7 @@ class VITA(Algorithm):
                 continue
 
             # CE part
-            ce_d = F.cross_entropy(u_logits[idx], y[idx])
+            ce_d = F.cross_entropy(s_logits[idx], y[idx])
             penalty=self._irm_penalty(u_logits[idx], y[idx])
             penalty_weight = (self.hparams['irm_lambda'] if self.update_steps
                                                             >= self.hparams['irm_penalty_anneal_iters'] else
@@ -3920,3 +3519,236 @@ class VITA(Algorithm):
             )
 
         return estimate / n
+
+#
+# class VITA_Zu_only(Algorithm):
+#     def __init__(self, input_shape, num_classes, num_domains, hparams):
+#         super(VITA_Zu_only, self).__init__(input_shape, num_classes, num_domains, hparams)
+#
+#         self.num_classes = num_classes
+#         self.num_domains = num_domains
+#         self.hparams = hparams
+#         self.update_steps = 0
+#
+#         # Override modules from IRM with custom projections and classifiers
+#         self.featurizer = networks.Featurizer(input_shape, hparams)
+#         self.z_dim = self.featurizer.n_outputs
+#         # self.z_dim = hparams['z_dim']
+#
+#         self.projection_phi = nn.Sequential(
+#             nn.Linear(self.featurizer.n_outputs, self.z_dim),
+#         )
+#         self.projection_psi = nn.Sequential(
+#             nn.Linear(self.featurizer.n_outputs, self.z_dim),
+#         )
+#
+#         self.classifier_u = networks.Classifier(self.z_dim, num_classes, is_nonlinear=True)
+#         self.domain_classifier = networks.Classifier(self.z_dim, num_domains, is_nonlinear=True)
+#
+#         self.optimizer = torch.optim.Adam(
+#             list(self.featurizer.parameters()) +
+#             list(self.projection_phi.parameters()) +
+#             list(self.projection_psi.parameters()) +
+#             list(self.classifier_u.parameters()) +
+#             list(self.domain_classifier.parameters()),
+#             lr=self.hparams["lr"],
+#             weight_decay=self.hparams['weight_decay'],
+#         )
+#
+#     def update(self, minibatches, unlabeled=None):
+#         self.update_steps += 1
+#
+#         all_x = torch.cat([x for x, _ in minibatches])
+#         all_y = torch.cat([y for _, y in minibatches])
+#         domain_labels = torch.cat([
+#             torch.full((x.size(0),), i, dtype=torch.long, device=all_x.device)
+#             for i, (x, _) in enumerate(minibatches)
+#         ])
+#
+#         z_u, z_s, u_logits = self.encode(all_x)
+#         loss_cls = F.cross_entropy(u_logits, all_y)
+#
+#         dom_logits = self.domain_classifier(z_s)
+#         loss_dom = F.cross_entropy(dom_logits, domain_labels)
+#         loss_mi = self.compute_conditional_MI(z_u, z_s, all_y, self.num_classes)
+#
+#         loss = (loss_cls +
+#                 self.hparams.get('mi_lambda', 0.) * loss_mi +
+#                 self.hparams.get('domain_lambda', 0.) * loss_dom)
+#
+#         self.optimizer.zero_grad()
+#         loss.backward()
+#         self.optimizer.step()
+#
+#         return {'loss_total': loss.item(),
+#                 'loss_cls': loss_cls.item(),
+#                 'loss_dom': loss_dom.item(),
+#                 'loss_mi': loss_mi.item()}
+#
+#     def encode(self, x):
+#         f = self.featurizer(x)
+#         z_u = self.projection_phi(f)
+#         z_s = self.projection_psi(f)
+#         u_logits = self.classifier_u(z_u)
+#         return z_u, z_s, u_logits
+#
+#     def predict(self, x):
+#         z_u, z_s, u_logits = self.encode(x)
+#         return u_logits
+#
+#     @staticmethod
+#     def compute_conditional_MI(zu, zs, y, num_classes):
+#         batch_size, feat_dim = zu.size()
+#         one_hot = F.one_hot(y, num_classes=num_classes).float()
+#
+#         sum_zs = one_hot.T @ zs
+#         count_zs = one_hot.sum(dim=0, keepdim=True).T + 1e-6
+#         mean_zs = sum_zs / count_zs
+#         mean_zs_per_sample = mean_zs[y]
+#         diff = zs - mean_zs_per_sample
+#         weighted_diff = zu * diff
+#         avg_weighted_diff = weighted_diff.mean(dim=0)
+#
+#         loss_MI = torch.norm(avg_weighted_diff, p=1)
+#         return loss_MI
+#
+# class VITA(VITA_Zu_only):
+#     def __init__(self, input_shape, num_classes, num_domains, hparams):
+#         super(VITA, self).__init__(input_shape, num_classes, num_domains, hparams)
+#
+#         # 新增模块：mask 和 classifier_tilde_s
+#         self.mask = nn.Parameter(torch.ones(self.z_dim))
+#         self.classifier_tilde_s = networks.Classifier(self.z_dim, num_classes, is_nonlinear=True)
+#
+#         self.phase1_steps = hparams.get('phase1_steps', 0)
+#         self.phase2_steps = hparams.get('phase2_steps', 0)
+#         self.finetune_steps = hparams.get('finetune_steps', 0)
+#
+#         # 默认初始化为 phase 1 参数
+#         self.set_phase(1)
+#
+#     def encode(self, x):
+#         f = self.featurizer(x)
+#         z_u = self.projection_phi(f)
+#         z_s = self.projection_psi(f)
+#         tilde_z_s = torch.sigmoid(self.mask) * z_s
+#         u_logits = self.classifier_u(z_u)
+#         s_logits = self.classifier_tilde_s(z_s)
+#         tilde_s_logits = self.classifier_tilde_s(tilde_z_s)
+#         combined_logits = u_logits + tilde_s_logits
+#         return z_u, z_s, tilde_z_s,u_logits, s_logits, tilde_s_logits, combined_logits
+#
+#     def update(self, minibatches, unlabeled=None):
+#         self.update_steps += 1
+#
+#         if self.update_steps <= self.phase1_steps:
+#             if self.phase != 1:
+#                 self.set_phase(1)
+#         elif self.update_steps <= self.phase1_steps + self.phase2_steps:
+#             if self.phase != 2:
+#                 self.set_phase(2)
+#         else:
+#             if self.phase not in (3, "finetune"):
+#                 self.set_phase("finetune")
+#
+#         if self.phase in (3, "finetune") and unlabeled is not None:
+#             all_x = torch.cat(unlabeled)
+#             all_y = None
+#             domain_labels = None
+#         else:
+#             all_x = torch.cat([x for x, _ in minibatches])
+#             all_y = torch.cat([y for _, y in minibatches])
+#             if self.phase == 1:
+#                 domain_labels = torch.cat([
+#                     torch.full((x.size(0),), i, dtype=torch.long, device=all_x.device)
+#                     for i, (x, _) in enumerate(minibatches)
+#                 ])
+#
+#
+#         z_u, z_s, u_logits, s_logits, tilde_s_logits, combined_logits = self.encode(all_x)
+#
+#         if self.phase == 1:
+#             loss_cls = F.cross_entropy(u_logits, all_y)
+#             features_by_domain = [z_u[domain_labels == d] for d in domain_labels.unique()]
+#             dom_logits = self.domain_classifier(z_s)
+#             loss_dom = F.cross_entropy(dom_logits, domain_labels)
+#             loss_mi = self.compute_conditional_MI(z_u, z_s, all_y, self.num_classes)
+#
+#             loss = (loss_cls +
+#                     self.hparams.get('mi_lambda', 0.) * loss_mi +
+#                     self.hparams.get('domain_lambda', 0.) * loss_dom)
+#
+#         elif self.phase == 2:
+#             logits = combined_logits if self.hparams.get('finetune_logits', 'tilde') == 'combined' else tilde_s_logits
+#             loss = F.cross_entropy(logits, all_y)
+#
+#         else:  # finetune: use pseudo labels
+#             logits = combined_logits if self.hparams.get('finetune_logits', 'tilde') == 'combined' else tilde_s_logits
+#             pseudo_labels = u_logits.detach().softmax(1).argmax(1)
+#             loss = F.cross_entropy(logits, pseudo_labels)
+#
+#         self.optimizer.zero_grad()
+#         loss.backward()
+#         self.optimizer.step()
+#
+#
+#         if self.phase == 1:
+#             return {'loss_total': loss.item(),
+#                     'loss_cls': loss_cls.item(),
+#                     'loss_dom': loss_dom.item(),
+#                     'loss_mi': loss_mi.item() }
+#         else:
+#             return {'loss':loss.item()}
+#
+#     def predict(self, x):
+#         _, _, _,u_logits, _, _, combined_logits = self.encode(x)
+#         if self.phase == 1:
+#             return u_logits
+#         else:
+#             return combined_logits
+#
+#     def set_phase(self, phase):
+#         """设置阶段并自动创建优化器"""
+#         self.phase = phase
+#         if phase == 1:
+#             self.optimizer = torch.optim.Adam(self.get_parameters_train_phase1(),
+#                                               lr=self.hparams["lr"],
+#                                               weight_decay=self.hparams["weight_decay"])
+#         elif phase == 2:
+#             self.optimizer = torch.optim.Adam(self.get_parameters_train_phase2(),
+#                                               lr=self.hparams["lr"],
+#                                               weight_decay=self.hparams["weight_decay"])
+#             self.freeze_bn()
+#         elif phase == 3 or phase == "finetune":
+#             self.optimizer = torch.optim.Adam(self.get_parameters_finetune(),
+#                                               lr=self.hparams["lr"],
+#                                               weight_decay=self.hparams["weight_decay"])
+#             self.freeze_bn()
+#         else:
+#             raise ValueError("Unsupported phase: must be 1, 2, or 'finetune'")
+#
+#     def get_parameters_train_phase1(self):
+#         base_params = itertools.chain(
+#             self.projection_phi.parameters(),
+#             self.projection_psi.parameters(),
+#             self.classifier_u.parameters(),
+#             self.domain_classifier.parameters())
+#         return list(self.featurizer.parameters()) + list(base_params)
+#
+#     def get_parameters_train_phase2(self):
+#         return list(self.classifier_tilde_s.parameters()) + [self.mask]
+#
+#     def get_parameters_finetune(self):
+#         return list(self.classifier_tilde_s.parameters()) + [self.mask]
+#
+#     def freeze_bn(self):
+#         """Freeze BatchNorm statistics for modules contributing to ``u_logits``."""
+#         u_related = set(chain(
+#             self.featurizer.modules(),
+#             self.projection_phi.modules(),
+#             self.classifier_u.modules()
+#         ))
+#         for m in self.modules():
+#             if m in u_related and isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d)):
+#                 m.eval()
+#                 m.track_running_stats = False

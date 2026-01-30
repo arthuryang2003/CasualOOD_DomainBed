@@ -14,4 +14,4 @@ python3 -m domainbed.scripts.sweep "${command}" \
        --n_trials 3 \
        --skip_confirmation \
        --hparams "$(<sweep/${dataset}/hparams.json)" \
-       --output_dir "sweep/${dataset}/VITA_IRM_Weight"
+       --output_dir "sweep/${dataset}/VITA_v2"

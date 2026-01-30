@@ -183,7 +183,7 @@ def main(args):
 
         if args.algorithm == "CasualOODAlgorithm" or args.algorithm == "VITA" :
             with torch.enable_grad():
-                z_u, z_s, u_logits, s_logits, tilde_s_logits, combined_logits = model.encode(img)
+                z_u, z_s, tilde_z_s, u_logits, s_logits, tilde_s_logits, combined_logits= model.encode(img)
                 class_idx_u = u_logits.argmax(dim=1).item()
                 class_idx_s = s_logits.argmax(dim=1).item()
                 class_idx_t = tilde_s_logits.argmax(dim=1).item()

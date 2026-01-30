@@ -129,12 +129,12 @@ python -m domainbed.scripts.sweep launch \
 ```
 sh run
 ```shell
-bash sweep/PACS/run.sh launch ./domainbed/data 2,3,4,5,6,7
-bash sweep/CelebA_Blond/run.sh launch ./domainbed/data 4,5,6,7
-bash sweep/NICOMixed/run.sh launch ./domainbed/data 6
-bash sweep/ColoredMNIST/run.sh launch ./domainbed/data 4,5,6
+bash sweep/PACS/run.sh launch ./domainbed/data 0,1,2,3,4,5,6
+bash sweep/CelebA_Blond/run_baseline.sh launch ./domainbed/data 6
+bash sweep/NICOMixed/run.sh launch ./domainbed/data 5,6
+bash sweep/ColoredMNIST/run.sh launch ./domainbed/data 3,4,5,6
 bash sweep/ColoredMNIST_IRM/run.sh launch ./domainbed/data 0,1,2,3
-bash sweep/COCOPlaces/run.sh launch ./domainbed/data 0,1,2,3
+bash sweep/COCOPlaces/run.sh launch ./domainbed/data 1,2,3,4,5
 bash sweep/COCOPlaces/run_baseline.sh launch ./domainbed/data 1,6,7
 bash sweep/Synthetic/run.sh launch ./domainbed/data 5,6
 ```
@@ -158,8 +158,8 @@ visualize
 ```shell
 python -m domainbed.scripts.visualize_cam \
     --data_dir=./domainbed/data \
-    --input_dir=./sweep/COCOPlaces/VITA_IRM_Weight  \
-    --dataset=COCOPlaces \
+    --input_dir=./sweep/CelebA_Blond/VITA_v2_test2  \
+    --dataset=CelebA_Blond \
     --algorithm=VITA \
     --test_env=2
 ```
@@ -169,7 +169,17 @@ python -m domainbed.scripts.plot_cam \
   --test_env 2 \
   --algorithms ERM,IRM,MMD,VITA \
   --input_dir ./sweep/CelebA_Blond/baselines \
-  --model_dir_VITA ./sweep/CelebA_Blond/VITA_IRM_Weight \
+  --model_dir_VITA ./sweep/CelebA_Blond/VITA_v3_test2 \
+  --out_dir visualize_cam \
+  --num_images 5
+
+python -m domainbed.scripts.plot_cam \
+  --data_dir ./domainbed/data  \
+  --dataset CelebA_Blond \
+  --test_env 2 \
+  --algorithms ERM,IRM,MMD,VITA \
+  --input_dir ./sweep/CelebA_Blond/baselines \
+  --model_dir_VITA ./sweep/CelebA_Blond/VITA \
   --out_dir visualize_cam \
   --num_images 5
 
@@ -203,13 +213,14 @@ To view the results of your sweep:
 
 ````sh
 python -m domainbed.scripts.collect_results\
-  --input_dir ./sweep/ColoredMNIST/VITA_v2_test3
+  --input_dir ./sweep/CelebA_Blond/VITA_v2_test2
 ````
 
 List top haparams  of your sweep:
 
 ````sh
-python -m domainbed.scripts.list_top_hparams     --input_dir ./sweep/ColoredMNIST_IRM/VITA_v2_test5   --dataset=ColoredMNIST_IRM --algorithm=VITA --test_env=2
+python -m domainbed.scripts.list_top_hparams     --input_dir ./sweep/CelebA_Blond/VITA_v2_test2   --dataset=CelebA_Blond --algorithm=VITA --test_env=2
+
 
 ````
 
