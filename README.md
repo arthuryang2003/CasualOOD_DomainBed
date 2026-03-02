@@ -132,10 +132,10 @@ sh run
 bash sweep/PACS/run.sh launch ./domainbed/data 0,1,2,3,4,5,6
 bash sweep/CelebA_Blond/run_baseline.sh launch ./domainbed/data 6
 bash sweep/NICOMixed/run.sh launch ./domainbed/data 5,6
-bash sweep/ColoredMNIST/run.sh launch ./domainbed/data 3,4,5,6
+bash sweep/ColoredMNIST/run_baseline.sh launch ./domainbed/data 1,2
 bash sweep/ColoredMNIST_IRM/run.sh launch ./domainbed/data 0,1,2,3
-bash sweep/COCOPlaces/run.sh launch ./domainbed/data 1,2,3,4,5
-bash sweep/COCOPlaces/run_baseline.sh launch ./domainbed/data 1,6,7
+bash sweep/COCOPlaces/run.sh launch ./domainbed/data 2,3,4,5
+bash sweep/COCOPlaces/run_baseline.sh launch ./domainbed/data 6,7
 bash sweep/Synthetic/run.sh launch ./domainbed/data 5,6
 ```
 
@@ -143,7 +143,7 @@ bash sweep/Synthetic/run.sh launch ./domainbed/data 5,6
 CUDA_VISIBLE_DEVICES=0,1,2,3 \
 python -m domainbed.scripts.sweep launch \
     --data_dir=./domainbed/data \
-    --output_dir=./CMNIST_CNN/VITA_0.1 \
+    --output_dir=./CMNIST/VITA \
     --command_launcher smart_gpu \
     --algorithms VITA \
     --datasets ColoredMNISTWithColor \
@@ -213,7 +213,7 @@ To view the results of your sweep:
 
 ````sh
 python -m domainbed.scripts.collect_results\
-  --input_dir ./sweep/CelebA_Blond/VITA_v2_test2
+  --input_dir ./sweep/COCOPlaces/TTA_baselines
 ````
 
 List top haparams  of your sweep:
@@ -240,6 +240,15 @@ By default, this only runs tests which don't depend on a dataset directory. To r
 ```sh
 DATA_DIR=/my/datasets/path python -m unittest discover
 ```
+
+
+````sh
+python -m domainbed.scripts.benchmark_training_cost \
+--data_dir ./domainbed/data \
+--dataset PACS \
+--methods ERM IRM MMD LFME ASGDRO VITA \
+--output_dir ./cost
+````
 
 ## License
 

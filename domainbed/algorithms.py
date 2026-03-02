@@ -3752,3 +3752,148 @@ class VITA(Algorithm):
 #             if m in u_related and isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d)):
 #                 m.eval()
 #                 m.track_running_stats = False
+
+
+
+class TENT(Algorithm):
+    """
+    Test-time Entropy Minimization (TENT)
+    """
+
+    def __init__(self, input_shape, num_classes, num_domains, hparams):
+        super(TENT, self).__init__(input_shape, num_classes, num_domains, hparams)
+        self.featurizer = networks.Featurizer(input_shape, self.hparams)
+        self.classifier = networks.Classifier(
+            self.featurizer.n_outputs,
+            num_classes,
+            self.hparams['nonlinear_classifier'])
+
+        self.network = nn.Sequential(self.featurizer, self.classifier)
+        self.optimizer = torch.optim.Adam(
+            self.network.parameters(),
+            lr=self.hparams["lr"],
+            weight_decay=self.hparams['weight_decay']
+        )
+        self.tta_optimizer = None
+        self._tent_configured = False
+
+    def update(self, minibatches, unlabeled=None):
+        for module in self.network.modules():
+            if isinstance(module, nn.modules.batchnorm._BatchNorm):
+                module.track_running_stats = True
+        all_x = torch.cat([x for x, y in minibatches])
+        all_y = torch.cat([y for x, y in minibatches])
+        loss = F.cross_entropy(self.network(all_x), all_y)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        return {'loss': loss.item()}
+
+    def configure_bn_for_tent(self):
+        tent_params = []
+        for module in self.network.modules():
+            if isinstance(module, nn.modules.batchnorm._BatchNorm):
+                module.track_running_stats = False
+                if module.weight is not None:
+                    module.weight.requires_grad = True
+                    tent_params.append(module.weight)
+                if module.bias is not None:
+                    module.bias.requires_grad = True
+                    tent_params.append(module.bias)
+        if tent_params:
+            self.tta_optimizer = torch.optim.Adam(
+                tent_params,
+                lr=self.hparams["tta_lr"]
+            )
+        else:
+            self.tta_optimizer = None
+        self._tent_configured = True
+
+    def test_adapt(self, x):
+        if not self._tent_configured:
+            self.configure_bn_for_tent()
+        for module in self.network.modules():
+            if isinstance(module, nn.modules.batchnorm._BatchNorm):
+                module.track_running_stats = False
+        self.network.eval()
+        logits = None
+        if self.tta_optimizer is None:
+            return self.network(x)
+        for _ in range(self.hparams["tta_steps"]):
+            logits = self.network(x)
+            probs = F.softmax(logits, dim=1)
+            entropy = -(probs * torch.log(probs + 1e-8)).sum(dim=1).mean()
+            self.tta_optimizer.zero_grad()
+            entropy.backward()
+            self.tta_optimizer.step()
+        return logits
+
+    def predict(self, x):
+        self.test_adapt(x)
+        return self.network(x)
+
+class SHOT(Algorithm):
+    """
+    Source Hypothesis Transfer (SHOT)
+    """
+
+    def __init__(self, input_shape, num_classes, num_domains, hparams):
+        super(SHOT, self).__init__(input_shape, num_classes, num_domains, hparams)
+        self.featurizer = networks.Featurizer(input_shape, self.hparams)
+        self.classifier = networks.Classifier(
+            self.featurizer.n_outputs,
+            num_classes,
+            self.hparams['nonlinear_classifier'])
+
+        self.network = nn.Sequential(self.featurizer, self.classifier)
+        self.optimizer = torch.optim.Adam(
+            self.network.parameters(),
+            lr=self.hparams["lr"],
+            weight_decay=self.hparams['weight_decay']
+        )
+        self.tta_optimizer = torch.optim.Adam(
+            self.featurizer.parameters(),
+            lr=self.hparams["tta_lr"]
+        )
+        self._shot_configured = False
+
+    def update(self, minibatches, unlabeled=None):
+        all_x = torch.cat([x for x, y in minibatches])
+        all_y = torch.cat([y for x, y in minibatches])
+        loss = F.cross_entropy(self.network(all_x), all_y)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        return {'loss': loss.item()}
+
+    def configure_for_shot(self):
+        self._shot_configured = True
+
+    def test_adapt(self, x):
+        if not self._shot_configured:
+            self.configure_for_shot()
+        self.network.eval()
+        logits = None
+        for _ in range(self.hparams["tta_steps"]):
+            logits = self.classifier(self.featurizer(x))
+            probs = F.softmax(logits, dim=1)
+            cond_ent = -(probs * torch.log(probs + 1e-8)).sum(dim=1).mean()
+            marg_p = probs.mean(dim=0)
+            marg_ent = -(marg_p * torch.log(marg_p + 1e-8)).sum()
+            loss_im = cond_ent - self.hparams["shot_lambda_div"] * marg_ent
+            max_probs, pseudo_labels = probs.max(dim=1)
+            mask = max_probs > self.hparams["shot_pl_thr"]
+            if mask.any():
+                loss_im = loss_im + F.cross_entropy(logits[mask], pseudo_labels[mask])
+            self.tta_optimizer.zero_grad()
+            loss_im.backward()
+            self.tta_optimizer.step()
+        return logits
+
+    def predict(self, x):
+        self.test_adapt(x)
+        return self.classifier(self.featurizer(x))

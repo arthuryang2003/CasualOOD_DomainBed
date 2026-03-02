@@ -675,3 +675,28 @@ class NpEncoder(json.JSONEncoder):
         except Exception:
             pass
         return super().default(obj)
+
+def accuracy_tta(network, loader, weights, device):
+    correct = 0
+    total = 0
+    weights_offset = 0
+
+    network.eval()
+    for batch in loader:
+        x = batch[0].to(device)
+        y = batch[1].to(device)
+        p = network.predict(x)
+        if weights is None:
+            batch_weights = torch.ones(len(x))
+        else:
+            batch_weights = weights[weights_offset : weights_offset + len(x)]
+            weights_offset += len(x)
+        batch_weights = batch_weights.to(device)
+        if p.size(1) == 1:
+            correct += (p.gt(0).eq(y).float() * batch_weights.view(-1, 1)).sum().item()
+        else:
+            correct += (p.argmax(1).eq(y).float() * batch_weights).sum().item()
+        total += batch_weights.sum().item()
+    network.train()
+
+    return correct / total

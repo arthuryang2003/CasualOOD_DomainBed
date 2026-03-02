@@ -59,6 +59,13 @@ def _hparams(algorithm, dataset, random_seed):
     elif algorithm == 'Fish':
         _hparam('meta_lr', 0.5, lambda r:r.choice([0.05, 0.1, 0.5]))
 
+    elif algorithm in ['TENT', 'SHOT']:
+        _hparam('tta_lr', 1e-3, lambda r: 10**r.uniform(-4, -2))
+        _hparam('tta_steps', 1, lambda r: int(r.choice([1, 5, 10])))
+        if algorithm == 'SHOT':
+            _hparam('shot_lambda_div', 0.1, lambda r: r.uniform(0.01, 1.0))
+            _hparam('shot_pl_thr', 0.9, lambda r: r.uniform(0.5, 0.95))
+
     elif algorithm == "RDM": 
         if dataset in ['DomainNet']: 
             _hparam('rdm_lambda', 0.5, lambda r: r.uniform(0.1, 1.0))
