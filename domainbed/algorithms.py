@@ -2687,48 +2687,118 @@ class ITTA(Algorithm):
     """
     Improved Test-Time Adaptation (ITTA)
     """
-
     def __init__(self, input_shape, num_classes, num_domains, hparams):
-        super(ITTA, self).__init__(input_shape, num_classes, num_domains,
-                                   hparams)
+        super(ITTA, self).__init__(input_shape, num_classes, num_domains, hparams)
         self.input_shape = input_shape
         self.num_classes = num_classes
 
-        if input_shape[1:3] == (28, 28):
-            self.featurizer = networks.MNIST_CNN(input_shape, self.hparams)
-        elif input_shape[1:3] == (224, 224):
-            self.featurizer = networks.ResNet_ITTA(input_shape, self.hparams)
-        else:
-            raise NotImplementedError
+        # ITTA-specific featurizer that returns two views
+        self.featurizer = networks.Featurizer_ITTA(input_shape, self.hparams)
 
         self.classifier = networks.Classifier(
             self.featurizer.n_outputs,
             num_classes,
-            self.hparams['nonlinear_classifier'])
-        self.test_mapping = networks.MappingNetwork()  # specialized for resnet18
-        self.test_optimizer = torch.optim.Adam(self.test_mapping.parameters(), lr=self.hparams["lr"] * 0.1)
-        self.optimizer = torch.optim.Adam([
-            {'params': self.featurizer.parameters()},
-            {'params': self.classifier.parameters()}],
+            self.hparams['nonlinear_classifier']
+        )
+
+        self.test_mapping = networks.MappingNetwork()
+        self.adaparams = networks.Adaparams()
+
+        self.MSEloss = nn.MSELoss()
+
+
+        self._init_lazy_modules_with_dummy_input()
+
+        self.test_optimizer = torch.optim.Adam(
+            self.test_mapping.parameters(),
+            lr=self.hparams["lr"] * 0.1
+        )
+        self.adaparams_optimizer = torch.optim.Adam(
+            self.adaparams.parameters(),
+            lr=self.hparams["lr"] * 0.1
+        )
+
+        self.optimizer = torch.optim.Adam(
+            [
+                {'params': self.featurizer.parameters()},
+                {'params': self.classifier.parameters()},
+            ],
             lr=self.hparams["lr"],
             weight_decay=self.hparams['weight_decay']
         )
-        self.MSEloss = nn.MSELoss()
-        self.adaparams = networks.Adaparams()  # specialized for resnet18
-        self.adaparams_optimizer = torch.optim.Adam(self.adaparams.parameters(), lr=self.hparams["lr"] * 0.1)
+
+    def _init_lazy_modules_with_dummy_input(self):
+        """
+        Run a dummy forward pass to trigger lazy initialization for modules
+        whose parameters depend on input tensor shapes (e.g., MappingNetwork/Adaparams).
+
+        This must be called BEFORE creating optimizers, otherwise Adam will
+        receive an empty parameter list and crash.
+        """
+        self.featurizer.eval()
+        self.classifier.eval()
+        self.test_mapping.eval()
+        self.adaparams.eval()
+
+        with torch.no_grad():
+            # Create a dummy batch on CPU (it will be moved later by .to(device))
+            dummy_x = torch.zeros((1,) + tuple(self.input_shape), dtype=torch.float32)
+
+            # ITTA featurizer returns (z_ori, z_aug)
+            z_ori, z_aug = self.featurizer(dummy_x)
+
+            # Initialize MappingNetwork stages by following the same path as predict()
+            # Stage 1 mapping
+            z1 = self.test_mapping.fea1(z_ori)
+
+            # fea2 is required by your ITTA pipeline (ResNet/MNIST/MLP_ITTA should all implement it)
+            z2, _ = self.featurizer.fea2(z1, z_aug)
+            z2 = self.test_mapping.fea2(z2)
+
+            # Stage 3/4 mapping (for MLP_ITTA, fea3/fea4 may be identity; that's fine)
+            z3 = self.featurizer.fea3(z2)
+            z3 = self.test_mapping.fea3(z3)
+
+            z4 = self.featurizer.fea4(z3)
+            z4 = self.test_mapping.fea4(z4)
+
+            # Initialize Adaparams using the final vector difference used in update()
+            # If fea_forward exists, use it to get final vectors; otherwise fall back to flat.
+            if hasattr(self.featurizer, "fea_forward"):
+                v = self.featurizer.fea_forward(z2)  # (B, D) for most backbones
+            else:
+                v = self.featurizer.flat(z4)
+
+            diff = v - v
+            _ = self.adaparams(diff)
+
+        self.featurizer.train()
+        self.classifier.train()
+        self.test_mapping.train()
+        self.adaparams.train()
 
     def _get_grads(self, loss):
-        self.optimizer.zero_grad()
-        loss.backward(inputs=list(self.featurizer.parameters()),
-                      retain_graph=True, create_graph=True)
-        dict = OrderedDict(
-            [
-                (name, weights.grad.clone().view(weights.grad.size(0), -1))
-                for name, weights in self.featurizer.named_parameters()
-            ]
+        params = [p for p in self.featurizer.parameters() if p.requires_grad]
+        names_params = [(n, p) for n, p in self.featurizer.named_parameters() if p.requires_grad]
+
+        grads = torch.autograd.grad(
+            loss,
+            params,
+            retain_graph=True,
+            create_graph=True,
+            allow_unused=True
         )
 
-        return dict
+        grad_dict = OrderedDict()
+        for (name, p), g in zip(names_params, grads):
+            if g is None:
+                g = torch.zeros_like(p)
+            if g.dim() == 0:
+                grad_dict[name] = g.view(1, 1)
+            else:
+                grad_dict[name] = g.contiguous().view(g.size(0), -1)
+
+        return grad_dict
 
     def update(self, minibatches, unlabeled=None):
         all_x = torch.cat([x for x, y in minibatches])

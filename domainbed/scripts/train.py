@@ -297,8 +297,10 @@ if __name__ == "__main__":
             for name, loader, weights in evals:
                 # if step >= 5000 :
                 #     misc.check_single_class_prediction(algorithm, loader, device)
-                if hasattr(algorithm, "test_adapt"):
-                    acc = misc.accuracy_tta(algorithm, loader, weights, device)
+                # if hasattr(algorithm, "test_adapt"):
+                #     acc = misc.accuracy_tta(algorithm, loader, weights, device)
+                if 'ITTA' in args.algorithm:
+                    acc = misc.accuracy_tsc(algorithm, loader, weights, device)
                 else:
                     acc = misc.accuracy(algorithm, loader, weights, device)
                 results[name + '_acc'] = acc

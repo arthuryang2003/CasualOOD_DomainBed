@@ -26,6 +26,7 @@ def distance(h1, h2):
         dist += torch.norm(h1_param - h2_param) ** 2  # use Frobenius norms for matrices
     return torch.sqrt(dist)
 
+
 def proj(delta, adv_h, h):
     ''' return proj_{B(h, \delta)}(adv_h), Euclidean projection to Euclidean ball'''
     ''' adv_h and h are two classifiers'''
@@ -39,14 +40,18 @@ def proj(delta, adv_h, h):
         # print("distance: ", distance(adv_h, h))
         return adv_h
 
-def l2_between_dicts(dict_1, dict_2):
+def l2_between_dicts(dict_1, dict_2, normalize=False):
     assert len(dict_1) == len(dict_2)
     dict_1_values = [dict_1[key] for key in sorted(dict_1.keys())]
     dict_2_values = [dict_2[key] for key in sorted(dict_1.keys())]
-    return (
-        torch.cat(tuple([t.view(-1) for t in dict_1_values])) -
-        torch.cat(tuple([t.view(-1) for t in dict_2_values]))
-    ).pow(2).mean()
+    dict_1_tensor = torch.cat(tuple([t.view(-1) for t in dict_1_values]))
+    dict_2_tensor = torch.cat(tuple([t.view(-1) for t in dict_2_values]))
+    if normalize:
+        dict_1_tensor = (dict_1_tensor-dict_1_tensor.mean().item()) / dict_1_tensor.std().item()
+        dict_2_tensor = (dict_2_tensor-dict_2_tensor.mean().item()) / dict_2_tensor.std().item()
+        dict_2_tensor = dict_2_tensor.detach()
+    return (dict_1_tensor-dict_2_tensor).pow(2).mean()
+
 
 class ErmPlusPlusMovingAvg:
     def __init__(self, network):
@@ -698,5 +703,40 @@ def accuracy_tta(network, loader, weights, device):
             correct += (p.argmax(1).eq(y).float() * batch_weights).sum().item()
         total += batch_weights.sum().item()
     network.train()
+
+    return correct / total
+
+
+def accuracy_tsc(network, loader, weights, device):
+    correct = 0
+    total = 0
+    weights_offset = 0
+    network.featurizer.requires_grad_(False)
+    network.classifier.requires_grad_(False)
+    for x, y in loader:
+        x = x.to(device)
+        y = y.to(device)
+        network.train()
+        #############
+        for i in range(1):
+            network.test_adapt(x)
+        network.eval()
+        with torch.no_grad():
+            p = network.predict(x)
+        ##############
+        if weights is None:
+            batch_weights = torch.ones(len(x))
+        else:
+            batch_weights = weights[weights_offset : weights_offset + len(x)]
+            weights_offset += len(x)
+        batch_weights = batch_weights.to(device)
+        if p.size(1) == 1:
+            correct += (p.gt(0).eq(y).float() * batch_weights.view(-1, 1)).sum().item()
+        else:
+            correct += (p.argmax(1).eq(y).float() * batch_weights).sum().item()
+        total += batch_weights.sum().item()
+    network.train()
+    network.featurizer.requires_grad_(True)
+    network.classifier.requires_grad_(True)
 
     return correct / total
