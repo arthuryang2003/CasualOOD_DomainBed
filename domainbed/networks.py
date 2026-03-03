@@ -107,73 +107,44 @@ class Identity(nn.Module):
         return x
 
 
+
 class MappingNetwork(nn.Module):
-    """
-    Generalized MappingNetwork for ITTA.
-
-    Instead of hardcoding feature map sizes (ResNet18-specific),
-    this version lazily initializes learnable affine transforms
-    based on the input tensor shape.
-
-    Each stage (fea1, fea2, fea3, fea4) has its own parameter stack.
-    """
-
     def __init__(self, depth=2):
         super().__init__()
         self.depth = depth
         self.relu = nn.ReLU(inplace=True)
-
-        # Each stage gets its own parameters (initialized lazily)
         self.stages = nn.ModuleDict()
         self.initialized = {}
 
+    def _param_shape(self, x):
+        if x.dim() == 4:
+            return (x.size(1), 1, 1)
+        elif x.dim() == 2:
+            return (x.size(1),)
+        else:
+            raise ValueError(f"Unsupported tensor shape: {x.shape}")
+
     def _initialize_stage(self, name, x):
-        """
-        Create parameters for a stage based on input tensor shape.
-        """
-        shape = x.shape[1:]  # exclude batch dimension
-
-        weight = nn.ParameterList()
-        bias = nn.ParameterList()
-
-        for _ in range(self.depth):
-            weight.append(nn.Parameter(torch.ones(shape)))
-            bias.append(nn.Parameter(torch.zeros(shape)))
-
-        self.stages[name] = nn.ModuleDict({
-            "weight": weight,
-            "bias": bias
-        })
-
+        shape = self._param_shape(x)
+        weight = nn.ParameterList([nn.Parameter(torch.ones(shape)) for _ in range(self.depth)])
+        bias = nn.ParameterList([nn.Parameter(torch.zeros(shape)) for _ in range(self.depth)])
+        self.stages[name] = nn.ModuleDict({"weight": weight, "bias": bias})
         self.initialized[name] = True
 
     def _forward_stage(self, name, x):
-        """
-        Apply stage-specific affine transforms.
-        """
         if name not in self.initialized:
             self._initialize_stage(name, x)
-
         weight = self.stages[name]["weight"]
         bias = self.stages[name]["bias"]
-
         for i in range(self.depth - 1):
             x = self.relu(weight[i] * x + bias[i])
-
         x = weight[-1] * x + bias[-1]
         return x
 
-    def fea1(self, x):
-        return self._forward_stage("fea1", x)
-
-    def fea2(self, x):
-        return self._forward_stage("fea2", x)
-
-    def fea3(self, x):
-        return self._forward_stage("fea3", x)
-
-    def fea4(self, x):
-        return self._forward_stage("fea4", x)
+    def fea1(self, x): return self._forward_stage("fea1", x)
+    def fea2(self, x): return self._forward_stage("fea2", x)
+    def fea3(self, x): return self._forward_stage("fea3", x)
+    def fea4(self, x): return self._forward_stage("fea4", x)
 
 
 class MLP(nn.Module):
@@ -806,106 +777,140 @@ class MNIST_trunk(nn.Module):
         return x
 
 class MLP_ITTA(nn.Module):
-    """
-    ITTA-compatible MLP featurizer.
-
-    IMPORTANT:
-    The ITTA algorithm in your code assumes a ResNet-like API:
-        forward -> (z_ori, z_aug)            # early features
-        fea2(z_ori, z_aug) -> (z_ori, z_aug) # mid-level transform
-        fea_forward(z) -> final vector       # final features before classifier
-        plus optional fea3/fea4/flat calls (used in test_adapt/predict)
-
-    This class implements those methods to make tabular/vector data (e.g., Synthetic) work.
-    """
     def __init__(self, n_inputs, n_outputs, hparams):
         super().__init__()
-        # NOTE: In DomainBed, MLP featurizer usually sets n_outputs = mlp_width.
-        # Your Featurizer_ITTA passes (input_dim, mlp_width, hparams), so keep it consistent.
         self.n_outputs = n_outputs
+        self.base = nn.Linear(n_inputs, n_outputs)
+        self.noise_std = float(hparams.get("itta_noise_std", 0.05))
 
-        width = hparams.get("mlp_width", n_outputs)
-        depth = hparams.get("mlp_depth", 3)
-        dropout = hparams.get("mlp_dropout", 0.0)
+    def fea2(self, z_ori, z_aug):
+        return z_ori, z_aug
 
-        # "Early" part (acts like ResNet layer1 output)
-        self.fc1 = nn.Linear(n_inputs, width)
-        self.drop = nn.Dropout(dropout)
+    def fea3(self, z):
+        return z
 
-        # "Trunk" part (acts like layer2-4, simplified)
-        hidden_layers = max(depth - 2, 0)
-        self.hiddens = nn.ModuleList([nn.Linear(width, width) for _ in range(hidden_layers)])
+    def fea4(self, z):
+        return z
 
-        # Final projection (optional; keep width->n_outputs)
-        self.fc_out = nn.Linear(width, n_outputs)
+    def flat(self, z):
+        return z
 
-        # Augmentation hyperparameters for vector input
-        self.itta_noise_std = float(hparams.get("itta_noise_std", 0.05))
-        self.itta_drop_prob = float(hparams.get("itta_drop_prob", 0.0))
+    def fea_forward(self, z):
+        return z
 
-    def _augment_input(self, x: torch.Tensor) -> torch.Tensor:
-        """Create an augmented view of vector input (feature dropout + Gaussian noise)."""
-        if not self.training:
+    def forward(self, x):
+        z_ori = self.base(x)
+        if self.training and self.noise_std > 0:
+            z_aug = z_ori + torch.randn_like(z_ori) * self.noise_std
+        else:
+            z_aug = z_ori
+        return z_ori, z_aug
+
+
+
+class ResNet8_ITTA(nn.Module):
+    def __init__(self, input_shape, hparams):
+        super().__init__()
+        self.hparams = hparams
+        self.in_planes = 128
+
+        self.conv1 = nn.Conv2d(input_shape[0], 128, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(128)
+
+        self.layer1 = self._make_layer(coco_resnet.BasicBlock, 128, 1, stride=1)
+        self.layer2 = self._make_layer(coco_resnet.BasicBlock, 256, 1, stride=2)
+        self.layer3 = self._make_layer(coco_resnet.BasicBlock, 512, 1, stride=2)
+
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.dropout = nn.Dropout(hparams.get("resnet_dropout", 0.0))
+
+        self.n_outputs = 512
+
+        self.isaug = True
+        self.eps = 1e-6
+        self.mixstyle_alpha = float(hparams.get("itta_mixstyle_alpha", 0.1))
+        self.aug_prob = float(hparams.get("itta_aug_prob", 0.5))
+
+        if not hparams.get("unfreeze_resnet_bn", False):
+            self.freeze_bn()
+
+    def _make_layer(self, block, planes, num_blocks, stride):
+        strides = [stride] + [1] * (num_blocks - 1)
+        layers = []
+        for st in strides:
+            layers.append(block(self.in_planes, planes, st))
+            self.in_planes = planes * block.expansion
+        return nn.Sequential(*layers)
+
+    def mixstyle(self, x):
+        alpha = self.mixstyle_alpha
+        if alpha <= 0:
             return x
-        if self.itta_drop_prob > 0:
-            mask = (torch.rand_like(x) > self.itta_drop_prob).float()
-            x = x * mask
-        if self.itta_noise_std > 0:
-            x = x + torch.randn_like(x) * self.itta_noise_std
+        B = x.size(0)
+        beta = torch.distributions.Beta(alpha, alpha)
+
+        mu = x.mean(dim=[2, 3], keepdim=True)
+        var = x.var(dim=[2, 3], keepdim=True)
+        sig = (var + self.eps).sqrt()
+        mu, sig = mu.detach(), sig.detach()
+
+        x_normed = (x - mu) / sig
+        lmda = beta.sample((B, 1, 1, 1)).to(x.device)
+        perm = torch.randperm(B, device=x.device)
+
+        mu2, sig2 = mu[perm], sig[perm]
+        mu_mix = mu * lmda + mu2 * (1 - lmda)
+        sig_mix = sig * lmda + sig2 * (1 - lmda)
+        return x_normed * sig_mix + mu_mix
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = F.relu(self.bn1(x))
+        x = self.layer1(x)
+
+        if self.training and (random.random() < self.aug_prob):
+            self.isaug = True
+            aug_x = self.mixstyle(x)
+        else:
+            self.isaug = False
+            aug_x = x
+
+        return x, aug_x
+
+    def fea2(self, x, aug_x):
+        x = self.layer2(x)
+        aug_x = self.layer2(aug_x)
+        if not self.isaug:
+            aug_x = self.mixstyle(aug_x)
+        return x, aug_x
+
+    def fea3(self, x):
+        return self.layer3(x)
+
+    def fea4(self, x):
         return x
 
-    def _early(self, x: torch.Tensor) -> torch.Tensor:
-        """Early feature extractor (analogous to ResNet layer1 output)."""
-        x = self.fc1(x)
-        x = self.drop(x)
-        x = F.relu(x)
-        return x  # shape: (B, width)
+    def flat(self, x):
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        x = self.dropout(x)
+        return x
 
-    def fea2(self, z_ori: torch.Tensor, z_aug: torch.Tensor):
-        """
-        Mid-level transform for ITTA.
+    def fea_forward(self, x):
+        x = self.fea3(x)
+        x = self.flat(x)
+        return x
 
-        For vector features, we can keep it as identity.
-        If you want stronger augmentation, you can also perturb z_aug here.
-        """
-        return z_ori, z_aug
+    def train(self, mode=True):
+        super().train(mode)
+        if not self.hparams.get("unfreeze_resnet_bn", False):
+            self.freeze_bn()
 
-    def fea3(self, z: torch.Tensor) -> torch.Tensor:
-        """Kept for API compatibility with ResNet_ITTA. Identity for MLP."""
-        return z
+    def freeze_bn(self):
+        for m in self.modules():
+            if isinstance(m, nn.BatchNorm2d):
+                m.eval()
 
-    def fea4(self, z: torch.Tensor) -> torch.Tensor:
-        """Kept for API compatibility with ResNet_ITTA. Identity for MLP."""
-        return z
-
-    def flat(self, z: torch.Tensor) -> torch.Tensor:
-        """
-        Kept for API compatibility.
-        In ResNet_ITTA this does pooling+flatten+dropout.
-        Here z is already (B, D), so return as-is.
-        """
-        return z
-
-    def fea_forward(self, z: torch.Tensor) -> torch.Tensor:
-        """
-        Shared trunk to produce final feature vector before classifier.
-        This corresponds to 'fea_forward' in ResNet_ITTA.
-        """
-        for layer in self.hiddens:
-            z = layer(z)
-            z = self.drop(z)
-            z = F.relu(z)
-        z = self.fc_out(z)
-        return z  # shape: (B, n_outputs)
-
-    def forward(self, x: torch.Tensor):
-        """
-        Returns two early features (z_ori, z_aug) for ITTA.
-        """
-        z_ori = self._early(x)
-        aug_x = self._augment_input(x)
-        z_aug = self._early(aug_x)
-        return z_ori, z_aug
 class MNIST_CNN_ITTA(nn.Module):
     """
     ITTA-compatible CNN for MNIST-like 28x28 inputs.
@@ -1070,6 +1075,9 @@ def Featurizer_ITTA(input_shape, hparams):
     # 28x28 images (e.g., MNIST / ColoredMNIST)
     elif input_shape[1:3] == (28, 28):
         return MNIST_CNN_ITTA(input_shape, hparams)
+
+    elif input_shape[1:3] == (64, 64):
+        return ResNet8_ITTA(input_shape, hparams)
 
     # 224x224 images (e.g., DomainBed large-scale datasets)
     elif input_shape[1:3] == (224, 224):

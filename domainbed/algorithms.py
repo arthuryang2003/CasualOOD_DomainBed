@@ -2728,44 +2728,26 @@ class ITTA(Algorithm):
         )
 
     def _init_lazy_modules_with_dummy_input(self):
-        """
-        Run a dummy forward pass to trigger lazy initialization for modules
-        whose parameters depend on input tensor shapes (e.g., MappingNetwork/Adaparams).
-
-        This must be called BEFORE creating optimizers, otherwise Adam will
-        receive an empty parameter list and crash.
-        """
         self.featurizer.eval()
         self.classifier.eval()
         self.test_mapping.eval()
         self.adaparams.eval()
 
         with torch.no_grad():
-            # Create a dummy batch on CPU (it will be moved later by .to(device))
             dummy_x = torch.zeros((1,) + tuple(self.input_shape), dtype=torch.float32)
 
-            # ITTA featurizer returns (z_ori, z_aug)
             z_ori, z_aug = self.featurizer(dummy_x)
 
-            # Initialize MappingNetwork stages by following the same path as predict()
-            # Stage 1 mapping
             z1 = self.test_mapping.fea1(z_ori)
-
-            # fea2 is required by your ITTA pipeline (ResNet/MNIST/MLP_ITTA should all implement it)
             z2, _ = self.featurizer.fea2(z1, z_aug)
             z2 = self.test_mapping.fea2(z2)
-
-            # Stage 3/4 mapping (for MLP_ITTA, fea3/fea4 may be identity; that's fine)
             z3 = self.featurizer.fea3(z2)
             z3 = self.test_mapping.fea3(z3)
-
             z4 = self.featurizer.fea4(z3)
             z4 = self.test_mapping.fea4(z4)
 
-            # Initialize Adaparams using the final vector difference used in update()
-            # If fea_forward exists, use it to get final vectors; otherwise fall back to flat.
             if hasattr(self.featurizer, "fea_forward"):
-                v = self.featurizer.fea_forward(z2)  # (B, D) for most backbones
+                v = self.featurizer.fea_forward(z2)
             else:
                 v = self.featurizer.flat(z4)
 
