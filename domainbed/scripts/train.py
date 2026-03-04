@@ -195,11 +195,13 @@ if __name__ == "__main__":
         num_workers=dataset.N_WORKERS)
         for i, (env, env_weights) in enumerate(uda_splits)]
 
+    eval_batch_size = 16 if args.algorithm == "ITTA" else 64
+
     if args.val_envs:
         eval_loaders = [FastDataLoader(
             dataset=env,
             #             batch_size=(4 if args.dataset.startswith('NICO') else 64),
-            batch_size=64,
+            batch_size=eval_batch_size,
             num_workers=dataset.N_WORKERS)
             for env, _ in (test_in_splits + out_splits + uda_splits)]
         eval_weights = [None for _, weights in (test_in_splits + out_splits + uda_splits)]
@@ -211,7 +213,7 @@ if __name__ == "__main__":
     else:
         eval_loaders = [FastDataLoader(
             dataset=env,
-            batch_size=64,
+            batch_size=eval_batch_size,
             num_workers=dataset.N_WORKERS)
             for env, _ in (in_splits + out_splits + uda_splits)]
         eval_weights = [None for _, weights in (in_splits + out_splits + uda_splits)]

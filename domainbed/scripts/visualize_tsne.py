@@ -84,12 +84,7 @@ class CheckpointSelection:
 
 
 def print_candidates(label: str, paths: Sequence[str]) -> None:
-    print(f"{label}:")
-    if not paths:
-        print("  (none)")
-        return
-    for path in paths:
-        print(f"  - {path}")
+    return
 
 
 def candidate_checkpoint_paths(root_dir: str, names: Sequence[str]) -> List[str]:
@@ -606,8 +601,46 @@ def sample_points(
     total = zu.shape[0]
     if total <= max_points:
         return zu, zs, labels, envs
+
     rng = np.random.RandomState(seed)
-    indices = rng.choice(total, size=max_points, replace=False)
+    unique_labels = sorted(np.unique(labels).tolist())
+    if len(unique_labels) <= 1:
+        indices = rng.choice(total, size=max_points, replace=False)
+        return zu[indices], zs[indices], labels[indices], envs[indices]
+
+    label_to_indices = {
+        int(label): np.where(labels == label)[0]
+        for label in unique_labels
+    }
+    for idxs in label_to_indices.values():
+        rng.shuffle(idxs)
+
+    target_per_class = max_points // len(unique_labels)
+    selected = []
+    leftovers = []
+
+    for label in unique_labels:
+        idxs = label_to_indices[int(label)]
+        take = min(len(idxs), target_per_class)
+        if take > 0:
+            selected.extend(idxs[:take].tolist())
+        if take < len(idxs):
+            leftovers.extend(idxs[take:].tolist())
+
+    remaining = max_points - len(selected)
+    if remaining > 0 and leftovers:
+        leftovers = np.array(leftovers)
+        rng.shuffle(leftovers)
+        selected.extend(leftovers[:remaining].tolist())
+
+    if len(selected) < max_points:
+        unselected = np.setdiff1d(np.arange(total), np.array(selected), assume_unique=False)
+        if len(unselected):
+            rng.shuffle(unselected)
+            selected.extend(unselected[:(max_points - len(selected))].tolist())
+
+    indices = np.array(selected[:max_points])
+    rng.shuffle(indices)
     return zu[indices], zs[indices], labels[indices], envs[indices]
 
 
@@ -706,6 +739,41 @@ def scatter_by_class(
         ax.set_title(title)
 
 
+def annotate_class_labels(
+    ax,
+    class_ids: Sequence[int],
+    class_style_map: Dict[int, Dict[str, object]],
+) -> None:
+    y = 0.96
+    base_x = 0.76
+    for idx, class_id in enumerate(class_ids):
+        style = class_style_map[int(class_id)]
+        x = base_x + idx * 0.16
+        ax.scatter(
+            [x],
+            [y],
+            s=52,
+            c=[style["color"]],
+            marker=style["marker"],
+            edgecolors="black",
+            linewidths=0.6,
+            transform=ax.transAxes,
+            clip_on=False,
+            zorder=5,
+        )
+        ax.text(
+            x + 0.03,
+            y,
+            f"Class {int(class_id)}",
+            transform=ax.transAxes,
+            ha="left",
+            va="center",
+            fontsize=14,
+            fontweight="bold",
+            color="black",
+        )
+
+
 def build_title(args, checkpoint_name: str, n_points: int, suffix: str = "") -> str:
     title = (
         f"{args.dataset} | {args.algorithm} | {checkpoint_name} | N={n_points}"
@@ -716,7 +784,27 @@ def build_title(args, checkpoint_name: str, n_points: int, suffix: str = "") -> 
 
 
 def ensure_output_dir(source_dir: str, dataset: str) -> str:
-    out_dir = os.path.join(source_dir, "tsne", dataset)
+    normalized = os.path.normpath(source_dir)
+    parts = normalized.split(os.sep)
+
+    sweep_root = None
+    if "sweep" in parts:
+        sweep_idx = parts.index("sweep")
+        if sweep_idx + 1 < len(parts):
+            sweep_root = os.sep.join(parts[:sweep_idx + 2])
+            if normalized.startswith(os.sep):
+                sweep_root = os.sep + sweep_root.lstrip(os.sep)
+
+    if sweep_root is None:
+        sweep_root = os.path.join("sweep", dataset)
+
+    out_dir = os.path.join(sweep_root, "tsne")
+    os.makedirs(out_dir, exist_ok=True)
+    return out_dir
+
+
+def ensure_run_output_dir(run_dir: str, dataset: str) -> str:
+    out_dir = os.path.join(run_dir, "tsne", dataset)
     os.makedirs(out_dir, exist_ok=True)
     return out_dir
 
@@ -737,6 +825,225 @@ def project_features_or_stub(
     return tsne_project(features, perplexity, iterations, seed)
 
 
+def sample_global_points(
+    zu: np.ndarray,
+    zs: np.ndarray,
+    labels: np.ndarray,
+    envs: np.ndarray,
+    max_points: int,
+    seed: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    total = zu.shape[0]
+    if total <= max_points:
+        return zu, zs, labels, envs
+    rng = np.random.RandomState(seed)
+    indices = rng.choice(total, size=max_points, replace=False)
+    return zu[indices], zs[indices], labels[indices], envs[indices]
+
+
+def balance_by_env_and_class(
+    zu: np.ndarray,
+    zs: np.ndarray,
+    labels: np.ndarray,
+    envs: np.ndarray,
+    seed: int,
+    points_per_group: Optional[int] = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    rng = np.random.RandomState(seed)
+    groups = []
+    for env_id in sorted(np.unique(envs).tolist()):
+        env_mask = (envs == env_id)
+        env_labels = labels[env_mask]
+        for class_id in sorted(np.unique(env_labels).tolist()):
+            group_idx = np.where(env_mask & (labels == class_id))[0]
+            if group_idx.size:
+                groups.append(group_idx)
+
+    if not groups:
+        return zu, zs, labels, envs
+
+    min_group_size = min(group.size for group in groups)
+    if points_per_group is not None and points_per_group > 0:
+        min_group_size = min(min_group_size, points_per_group)
+
+    if min_group_size <= 0:
+        return zu, zs, labels, envs
+
+    selected = []
+    for group in groups:
+        shuffled = group.copy()
+        rng.shuffle(shuffled)
+        selected.extend(shuffled[:min_group_size].tolist())
+
+    selected = np.array(selected)
+    rng.shuffle(selected)
+    return zu[selected], zs[selected], labels[selected], envs[selected]
+
+
+def plot_mixed_environment_tsne(
+    model: torch.nn.Module,
+    dataset_obj,
+    run_args: Dict[str, object],
+    selection: CheckpointSelection,
+    device: torch.device,
+    args,
+) -> None:
+    all_env_ids = infer_env_ids(dataset_obj)
+    env_ids = args.envs if args.envs else all_env_ids
+    env_ids = [int(env_id) for env_id in env_ids]
+    invalid_envs = [env_id for env_id in env_ids if env_id not in all_env_ids]
+    if invalid_envs:
+        raise ValueError(f"Invalid env ids {invalid_envs}. Available env ids: {all_env_ids}")
+
+    num_workers = get_num_workers(dataset_obj, args)
+    all_zu, all_zs, all_labels, all_envs = [], [], [], []
+    points_per_env = {}
+
+    for env_id in env_ids:
+        loader = DataLoader(
+            dataset_obj[env_id],
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=(device.type == "cuda"),
+        )
+        zu, zs, labels, envs = collect_features(model, loader, device, fallback_env=env_id)
+        if np.any(envs < 0):
+            envs = np.full_like(labels, env_id)
+        if len(labels) == 0:
+            continue
+        all_zu.append(zu)
+        all_zs.append(zs)
+        all_labels.append(labels)
+        all_envs.append(envs)
+        points_per_env[str(env_id)] = int(len(labels))
+
+    if not all_zu:
+        raise RuntimeError("No samples were collected for mixed-environment t-SNE.")
+
+    all_zu = np.concatenate(all_zu, axis=0)
+    all_zs = np.concatenate(all_zs, axis=0)
+    all_labels = np.concatenate(all_labels, axis=0)
+    all_envs = np.concatenate(all_envs, axis=0)
+
+    all_zu, all_zs, all_labels, all_envs = balance_by_env_and_class(
+        all_zu, all_zs, all_labels, all_envs, args.seed, args.max_points
+    )
+
+    tsne_zu = tsne_project(all_zu, args.tsne_perplexity, args.tsne_iter, args.seed)
+    tsne_zs = tsne_project(all_zs, args.tsne_perplexity, args.tsne_iter, args.seed)
+
+    class_ids = sorted(set(int(label) for label in all_labels.tolist()))
+    env_ids_present = sorted(set(int(env_id) for env_id in all_envs.tolist()))
+    cmap = plt.cm.tab10
+    class_colors_left = {
+        class_id: cmap(idx % 10)
+        for idx, class_id in enumerate(class_ids)
+    }
+    env_colors_right = {
+        env_id: cmap((idx + 4) % 10)
+        for idx, env_id in enumerate(env_ids_present)
+    }
+
+    plt.rcParams.update({
+        "font.family": "serif",
+        "font.serif": ["DejaVu Serif"],
+        "mathtext.fontset": "stix"
+    })
+
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+
+    for class_id in class_ids:
+        for env_id in env_ids_present:
+            idx = np.where((all_labels == class_id) & (all_envs == env_id))[0]
+            if idx.size == 0:
+                continue
+            axes[0].scatter(
+                tsne_zu[idx, 0],
+                tsne_zu[idx, 1],
+                s=22,
+                c=[class_colors_left[class_id]],
+                marker='o',
+                edgecolors="black",
+                linewidths=0.35,
+                alpha=0.85,
+            )
+
+    for env_id in env_ids_present:
+        for class_id in class_ids:
+            idx = np.where((all_envs == env_id) & (all_labels == class_id))[0]
+            if idx.size == 0:
+                continue
+            axes[1].scatter(
+                tsne_zs[idx, 0],
+                tsne_zs[idx, 1],
+                s=22,
+                c=[env_colors_right[env_id]],
+                marker='o',
+                edgecolors="black",
+                linewidths=0.35,
+                alpha=0.85,
+            )
+
+    axes[0].set_title(r"t-SNE($z_u$) (Invariant Features)", fontsize=14, fontweight="bold")
+    axes[1].set_title(r"t-SNE($z_s$) (Variant Features)", fontsize=14, fontweight="bold")
+    for ax in axes:
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    class_handles = [
+        Line2D(
+            [0], [0],
+            marker='o',
+            color='w',
+            label=f"Class {class_id}",
+            markerfacecolor=class_colors_left[class_id],
+            markeredgecolor='black',
+            markersize=7,
+            linewidth=0,
+        )
+        for class_id in class_ids
+    ]
+    env_handles = [
+        Line2D(
+            [0], [0],
+            marker='o',
+            color='w',
+            label=f"Env {env_id}",
+            markerfacecolor=env_colors_right[env_id],
+            markeredgecolor='black',
+            markersize=7,
+            linewidth=0,
+        )
+        for env_id in env_ids_present
+    ]
+
+    legend_left = axes[0].legend(
+        handles=class_handles,
+        loc="best",
+        frameon=False,
+        fontsize=11,
+    )
+    legend_right = axes[1].legend(
+        handles=env_handles,
+        loc="best",
+        frameon=False,
+        fontsize=11,
+    )
+    for text in legend_left.get_texts():
+        text.set_fontweight("bold")
+    for text in legend_right.get_texts():
+        text.set_fontweight("bold")
+
+    fig.tight_layout()
+
+    output_dir = ensure_output_dir(args.input_dir or args.model_dir, args.dataset)
+    figure_path = os.path.join(output_dir, "tsne_mixed_env.png")
+    fig.savefig(figure_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved mixed-environment figure: {figure_path}")
+
+
 def main(args) -> None:
     set_seed(args.seed)
     device = infer_device(args.device)
@@ -755,16 +1062,6 @@ def main(args) -> None:
     selection = select_checkpoint_from_input_dir(
         search_dir, args.dataset, args.algorithm, args.test_env
     )
-    print(f"Selected checkpoint: {selection.checkpoint_path}")
-    if selection.metric_name is not None and selection.metric_value is not None:
-        print(
-            f"Selection basis: {selection.selection_reason}; "
-            f"{selection.metric_name}={selection.metric_value:.6f}"
-        )
-        if selection.metric_source:
-            print(f"Metric source: {selection.metric_source}")
-    else:
-        print(f"Selection basis: {selection.selection_reason}")
 
     checkpoint_bundle = load_checkpoint_bundle(selection.checkpoint_path)
     model = load_model_from_bundle(checkpoint_bundle)
@@ -781,23 +1078,35 @@ def main(args) -> None:
     if getattr(dataset_class, "ENVIRONMENTS", None) is not None:
         constructor_test_envs = list(range(len(dataset_class.ENVIRONMENTS)))
     dataset_obj = dataset_class(args.data_dir, constructor_test_envs, hparams)
-    env_ids = infer_env_ids(dataset_obj)
+
+    if args.mixed_env:
+        plot_mixed_environment_tsne(
+            model=model,
+            dataset_obj=dataset_obj,
+            run_args=run_args,
+            selection=selection,
+            device=device,
+            args=args,
+        )
+        return
+
     num_workers = get_num_workers(dataset_obj, args)
+
+    all_env_ids = infer_env_ids(dataset_obj)
+    env_ids = args.envs if args.envs else [args.test_env]
+    env_ids = [int(env_id) for env_id in env_ids]
+    invalid_envs = [env_id for env_id in env_ids if env_id not in all_env_ids]
+    if invalid_envs:
+        raise ValueError(f"Invalid env ids {invalid_envs}. Available env ids: {all_env_ids}")
 
     env_results = []
     all_labels_seen = []
     points_per_env = {}
 
     for env_id in env_ids:
-        split_dataset = reconstruct_target_split(
-            dataset_obj,
-            run_args,
-            args.algorithm,
-            env_id,
-            args.split,
-        )
+        env_dataset = dataset_obj[env_id]
         loader = DataLoader(
-            split_dataset,
+            env_dataset,
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=num_workers,
@@ -808,8 +1117,11 @@ def main(args) -> None:
         if np.any(envs < 0):
             envs = np.full_like(labels, env_id)
         zu, zs, labels, envs = sample_points(
-            zu, zs, labels, envs, args.max_points_per_env, args.seed + int(env_id)
+            zu, zs, labels, envs, args.max_points_per_env, args.seed + env_id
         )
+
+        if not len(labels):
+            continue
 
         zu_2d = project_features_or_stub(
             zu, args.tsne_perplexity, args.tsne_iter, args.seed, env_id, "zu"
@@ -818,8 +1130,6 @@ def main(args) -> None:
             zs, args.tsne_perplexity, args.tsne_iter, args.seed, env_id, "zs"
         )
 
-        all_labels_seen.extend(labels.tolist())
-        points_per_env[str(env_id)] = int(len(labels))
         env_results.append(
             {
                 "env_id": env_id,
@@ -828,11 +1138,10 @@ def main(args) -> None:
                 "zs_2d": zs_2d,
             }
         )
+        all_labels_seen.extend(labels.tolist())
+        points_per_env[str(env_id)] = int(len(labels))
 
     if not env_results:
-        raise RuntimeError("No environment data was collected for visualization.")
-
-    if not all_labels_seen:
         raise RuntimeError("No labeled samples were collected for visualization.")
 
     output_root = args.input_dir or args.model_dir
@@ -850,12 +1159,8 @@ def main(args) -> None:
     class_style_map = build_class_style_map(class_ids)
 
     rows = len(env_results)
-    fig_width = 14
-    fig_height = max(4, 4 * rows)
-    fig, axes = plt.subplots(rows, 2, figsize=(fig_width, fig_height), squeeze=False)
-
+    fig, axes = plt.subplots(rows, 2, figsize=(14, max(4, 4 * rows)), squeeze=False)
     for row_idx, env_result in enumerate(env_results):
-        env_id = env_result["env_id"]
         labels = env_result["labels"]
         scatter_by_class(
             axes[row_idx, 0],
@@ -871,13 +1176,13 @@ def main(args) -> None:
             class_style_map,
             None,
         )
+        annotate_class_labels(axes[row_idx, 0], class_ids, class_style_map)
+        annotate_class_labels(axes[row_idx, 1], class_ids, class_style_map)
 
-    num_rows = len(env_results)
     for row_idx, env_result in enumerate(env_results):
-        y = 1 - (row_idx + 0.5) / num_rows
         fig.text(
-            0.02,
-            y,
+            0.025,
+            1 - (row_idx + 0.5) / len(env_results),
             f"env={env_result['env_id']}",
             rotation=90,
             ha="center",
@@ -887,8 +1192,8 @@ def main(args) -> None:
         )
 
     fig.text(
-        0.25,
-        0.025,
+        0.28,
+        0.035,
         r"Left: t-SNE($z_u$) (Invariant Features)",
         ha="center",
         va="center",
@@ -896,8 +1201,8 @@ def main(args) -> None:
         fontweight="bold"
     )
     fig.text(
-        0.75,
-        0.025,
+        0.72,
+        0.035,
         r"Right: t-SNE($z_s$) (Variant Features)",
         ha="center",
         va="center",
@@ -905,28 +1210,7 @@ def main(args) -> None:
         fontweight="bold"
     )
 
-    legend_map = {}
-    for ax in axes.flat:
-        handles, labels = ax.get_legend_handles_labels()
-        for handle, label in zip(handles, labels):
-            if label not in legend_map:
-                legend_map[label] = handle
-
-    if legend_map:
-        legend = fig.legend(
-            list(legend_map.values()),
-            list(legend_map.keys()),
-            loc="lower center",
-            ncol=min(len(legend_map), 4),
-            frameon=False,
-            fontsize=14,
-            prop={"weight": "bold"},
-        )
-        for text in legend.get_texts():
-            text.set_fontweight("bold")
-            text.set_fontsize(14)
-
-    fig.tight_layout(rect=[0.07, 0.08, 1, 0.98])
+    fig.tight_layout(rect=[0.05, 0.08, 1, 0.98])
     fig.savefig(figure_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved figure: {figure_path}")
@@ -941,7 +1225,7 @@ def main(args) -> None:
         "metric_source": selection.metric_source,
         "dataset": args.dataset,
         "algorithm": args.algorithm,
-        "split": args.split,
+        "split": "train",
         "device": str(device),
         "seed": args.seed,
         "tsne_perplexity": args.tsne_perplexity,
@@ -966,11 +1250,14 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, required=True)
     parser.add_argument("--algorithm", type=str, required=True)
     parser.add_argument("--test_env", type=int, default=0)
+    parser.add_argument("--envs", type=int, nargs="+", default=None)
     parser.add_argument("--split", type=str, default="test", choices=["train", "val", "test"])
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--num_workers", type=int, default=0)
-    parser.add_argument("--max_points_per_env", type=int, default=2000)
+    parser.add_argument("--mixed_env", action="store_true")
+    parser.add_argument("--max_points", type=int, default=4000)
+    parser.add_argument("--max_points_per_env", type=int, default=10000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--tsne_perplexity", type=float, default=30.0)
     parser.add_argument("--tsne_iter", type=int, default=1500)
