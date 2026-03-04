@@ -3573,97 +3573,149 @@ class VITA(Algorithm):
         return estimate / n
 
 #
-# class VITA_Zu_only(Algorithm):
-#     def __init__(self, input_shape, num_classes, num_domains, hparams):
-#         super(VITA_Zu_only, self).__init__(input_shape, num_classes, num_domains, hparams)
-#
-#         self.num_classes = num_classes
-#         self.num_domains = num_domains
-#         self.hparams = hparams
-#         self.update_steps = 0
-#
-#         # Override modules from IRM with custom projections and classifiers
-#         self.featurizer = networks.Featurizer(input_shape, hparams)
-#         self.z_dim = self.featurizer.n_outputs
-#         # self.z_dim = hparams['z_dim']
-#
-#         self.projection_phi = nn.Sequential(
-#             nn.Linear(self.featurizer.n_outputs, self.z_dim),
-#         )
-#         self.projection_psi = nn.Sequential(
-#             nn.Linear(self.featurizer.n_outputs, self.z_dim),
-#         )
-#
-#         self.classifier_u = networks.Classifier(self.z_dim, num_classes, is_nonlinear=True)
-#         self.domain_classifier = networks.Classifier(self.z_dim, num_domains, is_nonlinear=True)
-#
-#         self.optimizer = torch.optim.Adam(
-#             list(self.featurizer.parameters()) +
-#             list(self.projection_phi.parameters()) +
-#             list(self.projection_psi.parameters()) +
-#             list(self.classifier_u.parameters()) +
-#             list(self.domain_classifier.parameters()),
-#             lr=self.hparams["lr"],
-#             weight_decay=self.hparams['weight_decay'],
-#         )
-#
-#     def update(self, minibatches, unlabeled=None):
-#         self.update_steps += 1
-#
-#         all_x = torch.cat([x for x, _ in minibatches])
-#         all_y = torch.cat([y for _, y in minibatches])
-#         domain_labels = torch.cat([
-#             torch.full((x.size(0),), i, dtype=torch.long, device=all_x.device)
-#             for i, (x, _) in enumerate(minibatches)
-#         ])
-#
-#         z_u, z_s, u_logits = self.encode(all_x)
-#         loss_cls = F.cross_entropy(u_logits, all_y)
-#
-#         dom_logits = self.domain_classifier(z_s)
-#         loss_dom = F.cross_entropy(dom_logits, domain_labels)
-#         loss_mi = self.compute_conditional_MI(z_u, z_s, all_y, self.num_classes)
-#
-#         loss = (loss_cls +
-#                 self.hparams.get('mi_lambda', 0.) * loss_mi +
-#                 self.hparams.get('domain_lambda', 0.) * loss_dom)
-#
-#         self.optimizer.zero_grad()
-#         loss.backward()
-#         self.optimizer.step()
-#
-#         return {'loss_total': loss.item(),
-#                 'loss_cls': loss_cls.item(),
-#                 'loss_dom': loss_dom.item(),
-#                 'loss_mi': loss_mi.item()}
-#
-#     def encode(self, x):
-#         f = self.featurizer(x)
-#         z_u = self.projection_phi(f)
-#         z_s = self.projection_psi(f)
-#         u_logits = self.classifier_u(z_u)
-#         return z_u, z_s, u_logits
-#
-#     def predict(self, x):
-#         z_u, z_s, u_logits = self.encode(x)
-#         return u_logits
-#
-#     @staticmethod
-#     def compute_conditional_MI(zu, zs, y, num_classes):
-#         batch_size, feat_dim = zu.size()
-#         one_hot = F.one_hot(y, num_classes=num_classes).float()
-#
-#         sum_zs = one_hot.T @ zs
-#         count_zs = one_hot.sum(dim=0, keepdim=True).T + 1e-6
-#         mean_zs = sum_zs / count_zs
-#         mean_zs_per_sample = mean_zs[y]
-#         diff = zs - mean_zs_per_sample
-#         weighted_diff = zu * diff
-#         avg_weighted_diff = weighted_diff.mean(dim=0)
-#
-#         loss_MI = torch.norm(avg_weighted_diff, p=1)
-#         return loss_MI
-#
+class VITA_Zu_only(Algorithm):
+    def __init__(self, input_shape, num_classes, num_domains, hparams):
+        super(VITA_Zu_only, self).__init__(input_shape, num_classes, num_domains, hparams)
+
+        self.num_classes = num_classes
+        self.num_domains = num_domains
+        self.hparams = hparams
+        self.update_steps = 0
+
+        # Override modules from IRM with custom projections and classifiers
+        self.featurizer = networks.Featurizer(input_shape, hparams)
+        self.z_dim = self.featurizer.n_outputs
+        # self.z_dim = hparams['z_dim']
+
+        self.projection_phi = nn.Sequential(
+            nn.Linear(self.featurizer.n_outputs, self.z_dim),
+        )
+        self.projection_psi = nn.Sequential(
+            nn.Linear(self.featurizer.n_outputs, self.z_dim),
+        )
+
+        self.classifier = networks.Classifier(self.z_dim, num_classes, is_nonlinear=True)
+        self.domain_classifier = networks.Classifier(self.z_dim, num_domains, is_nonlinear=True)
+
+        self.optimizer = torch.optim.Adam(
+            list(self.featurizer.parameters()) +
+            list(self.projection_phi.parameters()) +
+            list(self.projection_psi.parameters()) +
+            list(self.classifier_u.parameters()) +
+            list(self.domain_classifier.parameters()),
+            lr=self.hparams["lr"],
+            weight_decay=self.hparams['weight_decay'],
+        )
+
+    def update(self, minibatches, unlabeled=None):
+        self.update_steps += 1
+
+        all_x = torch.cat([x for x, _ in minibatches])
+        all_y = torch.cat([y for _, y in minibatches])
+        domain_labels = torch.cat([
+            torch.full((x.size(0),), i, dtype=torch.long, device=all_x.device)
+            for i, (x, _) in enumerate(minibatches)
+        ])
+
+        z_u, z_s, u_logits,s_logits = self.encode(all_x)
+        loss_cls = F.cross_entropy(u_logits, all_y)
+
+        dom_logits = self.domain_classifier(z_s)
+        loss_dom = F.cross_entropy(dom_logits, domain_labels)
+
+        #  gradient penalty on inner_loss = CE(tilde_s) + mi_lambda * MI_proxy(u, s | y)
+        with torch.no_grad():
+            u_probs = F.softmax(u_logits, dim=1)
+        s_probs = F.softmax(s_logits, dim=1)
+
+        # MI proxy part
+        loss_mi = self._conditional_independence_reg(
+            A_probs=u_probs,  # from u_logits
+            B_probs=s_probs,  # from s_logits (unmasked)
+            y=all_y
+        )
+        loss = (loss_cls +
+                self.hparams.get('mi_lambda', 0.) * loss_mi +
+                self.hparams.get('domain_lambda', 0.) * loss_dom)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        return {'loss_total': loss.item(),
+                'loss_cls': loss_cls.item(),
+                'loss_dom': loss_dom.item(),
+                'loss_mi': loss_mi.item()}
+
+    def encode(self, x):
+        f = self.featurizer(x)
+        z_u = self.projection_phi(f)
+        z_s = self.projection_psi(f)
+        u_logits = self.classifier(z_u)
+        s_logits = self.classifier(z_s)
+        return z_u, z_s, u_logits,s_logits
+
+    def predict(self, x):
+        z_u, z_s, u_logits,s_logits = self.encode(x)
+        return u_logits
+
+
+    # ===================== MI PROXY =====================
+    def _conditional_independence_reg(self,
+                                      A_probs: torch.Tensor,
+                                      B_probs: torch.Tensor,
+                                      y: torch.Tensor) -> torch.Tensor:
+        """
+        Conditional-independence regularizer (MI proxy), strictly following the provided
+        DiscreteConditionalExpecationTest implementation:
+
+          reg_vec = DiscreteConditionalExpecationTest(A_probs, B_probs, y)
+          reg = || reg_vec ||_1
+
+        A_probs = softmax(u_logits), shape (N, C)
+        B_probs = softmax(s_logits), shape (N, C)
+        y       = class labels (N,) or (N,1), dtype long/int
+        """
+        reg_vec = self._discrete_conditional_expectation_test(A_probs, B_probs, y)
+        reg = torch.sum(torch.abs(reg_vec))
+        return reg
+
+    def _discrete_conditional_expectation_test(self,
+                                               x: torch.Tensor,
+                                               y: torch.Tensor,
+                                               z: torch.Tensor) -> torch.Tensor:
+        n, _ = x.shape
+
+        # flatten z to (N,)
+        if z.dim() > 1:
+            temp_z = z[:, 0]
+        else:
+            temp_z = z
+
+        # sort by z
+        labels_in_batch_sorted, indices = torch.sort(temp_z)
+        # find boundaries of each unique z
+        unique_ixs = 1 + (labels_in_batch_sorted[1:] - labels_in_batch_sorted[:-1]).nonzero()
+        unique_ixs = [0] + unique_ixs.flatten().cpu().numpy().tolist() + [len(temp_z)]
+
+        estimate = torch.zeros(y.size(1), device=y.device, dtype=y.dtype)
+        for j in range(len(unique_ixs) - 1):
+            l, r = unique_ixs[j], unique_ixs[j + 1]
+            count = r - l
+            if count < 2:
+                continue
+            curr_class_slice = slice(l, r)
+            curr_class_indices = indices[curr_class_slice].sort()[0]  # ascending indices within this z-group
+
+            y_cond_z = torch.mean(y[curr_class_indices, :], dim=0, keepdim=True)  # E[y|z]
+            estimate += torch.sum(
+                x[curr_class_indices, :] * (y[curr_class_indices, :] - y_cond_z),
+                dim=0
+            )
+
+        return estimate / n
+
+
 # class VITA(VITA_Zu_only):
 #     def __init__(self, input_shape, num_classes, num_domains, hparams):
 #         super(VITA, self).__init__(input_shape, num_classes, num_domains, hparams)
